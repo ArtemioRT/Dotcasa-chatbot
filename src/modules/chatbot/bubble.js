@@ -5,13 +5,13 @@ import axios from 'axios';
 import { BUBBLE_SEARCH_URL } from '../../shared/config.js';
 import { httpsAgent } from '../../shared/httpAgents.js';
 import { normalizeComparableText, parseBubbleNumber } from '../../shared/utils.js';
-import { parseLocacion, haversineKm } from './geocoding.js';
+import { parsePropertyCoords, haversineKm } from './geocoding.js';
 
 export function parseBubbleProperties(raw) {
   if (typeof raw === 'string') {
-    let normalized = raw.replace(/"Proximidad":\s*(-?\d+),(\d+)/g, '"Proximidad":$1.$2');
-    normalized = normalized.replace(/"Proximidad":\s*[\n\r]*\s*([},])/g, '"Proximidad":null$1');
-    normalized = normalized.replace(/"(Pisos|N_Banos|N_Habitaciones|Precio|M2_Terreno|M2_Construccion)":\s*""\s*([},])/g, '"$1":null$2');
+    let normalized = raw.replace(/"(Proximidad|Latitud|Longitud)":\s*(-?\d+),(\d+)/g, '"$1":$2.$3');
+    normalized = normalized.replace(/"(Proximidad|Latitud|Longitud)":\s*[\n\r]*\s*([},])/g, '"$1":null$2');
+    normalized = normalized.replace(/"(Pisos|N_Banos|N_Habitaciones|Precio|M2_Terreno|M2_Construccion|Latitud|Longitud)":\s*""\s*([},])/g, '"$1":null$2');
     normalized = normalized.replace(/"(Antiguedad|Ciudad|Estado|Colonia)":\s*""\s*([},])/g, '"$1":null$2');
     try {
       const parsed = JSON.parse(`[${normalized}]`);
@@ -113,9 +113,7 @@ export function filterByProximity(properties, refCoords, radiusKm) {
       }
       continue;
     }
-    const locRaw = prop['Locación'] || prop['Locacion'] || prop['locacion'] || null;
-    if (!locRaw || locRaw === '' || locRaw === 'null') continue;
-    const coords = parseLocacion(locRaw);
+    const coords = parsePropertyCoords(prop);
     if (coords && coords.lat && coords.lng && !isNaN(coords.lat) && !isNaN(coords.lng)) {
       const d = haversineKm(refCoords.lat, refCoords.lng, coords.lat, coords.lng);
       if (!isNaN(d) && d <= radiusKm) {

@@ -2,6 +2,7 @@
 // SCORING ENGINE v2.0 — puntuación, clasificación y formateo de propiedades
 // ============================================================================
 import { parseBubbleNumber, normalizePublicUrl } from '../../shared/utils.js';
+import { parsePropertyCoords } from './geocoding.js';
 
 export function scoreProperty(prop, params, refCoords) {
   let score = 0;
@@ -160,6 +161,7 @@ export function extractPhotoUrl(prop) {
 export function formatProperties(properties) {
   return properties.map(prop => {
     const fotoPrincipal = extractPhotoUrl(prop);
+    const coords = parsePropertyCoords(prop);
     return {
       Tipo_de_inmueble: prop['Tipo_de_inmueble'] || prop['tipo_de_inmueble'] || '',
       M2_Terreno: prop['M2_Terreno'] || prop['M^2_Terreno'] || prop['m2_terreno'] || '',
@@ -177,6 +179,8 @@ export function formatProperties(properties) {
       Foto_principal: fotoPrincipal,
       Pisos: prop['Pisos'] || prop['N_pisos'] || prop['pisos'] || '',
       Proximidad: parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']) ?? null,
+      Latitud: coords?.lat ?? null,
+      Longitud: coords?.lng ?? null,
       Score: prop['__score__'] ?? null
     };
   });

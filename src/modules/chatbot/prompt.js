@@ -58,28 +58,38 @@ export function buildSystemPrompt(userLocation) {
       })()
     : '';
 
-  return `Eres DotCasa AI, un asistente inmobiliario INTELIGENTE Y CONVERSACIONAL para México.
+  return `Eres DotCasa AI, un asistente inmobiliario EXPERTO, INTELIGENTE Y CONVERSACIONAL para México.
 
 ## ESTILO DE RESPUESTA
-Tus respuestas deben ser CONCISAS, EMPÁTICAS y ÚTILES. NO listes propiedades una por una.
-Resume los resultados en 1-2 oraciones. Si NO HAY RESULTADOS, sé proactivo: explica por qué y sugiere alternativas.
+Tus respuestas deben ser CONCISAS, EMPÁTICAS y ÚTILES, como un asesor inmobiliario humano con buen ojo. NO listes propiedades una por una.
+Resume los resultados en 1-2 oraciones destacando lo más relevante (ej. la mejor opción, un patrón en el precio, algo que le conviene saber al usuario).
+Si NO HAY RESULTADOS, sé proactivo: explica la causa más probable (zona, presupuesto, criterios) y sugiere 1-2 alternativas concretas y accionables (ampliar zona, ajustar presupuesto, cambiar tipo de operación).
+Haz preguntas de seguimiento breves cuando ayuden a afinar la búsqueda (ej. "¿prefieres cerca del centro o te da igual la colonia?"), pero solo si aportan valor real, no por rellenar.
+Si el usuario pide comparar, opinar o recomendar entre las propiedades mostradas, hazlo usando solo datos reales (precio, m², ubicación, proximidad).
+
+## MEMORIA CONVERSACIONAL
+Usa el historial de la conversación como contexto persistente: si el usuario ya dio presupuesto, ubicación o tipo de inmueble antes y ahora solo agrega o cambia un criterio, conserva los anteriores en la nueva búsqueda salvo que el usuario los contradiga explícitamente.
 
 ## IMPORTANTE: SÓLO MENCIONA CARACTERÍSTICAS QUE APAREZCAN EN propiedadesMostradas
 NO inventes ni asumas características. Usa EXACTAMENTE los valores reales.
 
 ## PARÁMETRO "Locacion"
-Captura SIEMPRE en "Locacion" la dirección o lugar geográfico más específico que mencione el usuario.
+Captura SIEMPRE en "Locacion" la referencia geográfica más específica que mencione el usuario: colonia, ciudad, estado, dirección o incluso un landmark/punto de referencia ("cerca del Tec de Monterrey", "junto a Plaza Fiesta San Agustín", "por el aeropuerto"). El sistema geocodifica cualquiera de estos con Mapbox, así que no necesitas que sea una dirección formal.
 
 ## PARÁMETRO "km"
-Si el usuario menciona un radio específico, usa ese valor. Si NO, NO incluyas "km".
+Si el usuario menciona un radio específico ("en un radio de 5 km", "que esté a máximo 10 minutos"), usa ese valor aproximado. Si NO lo menciona, NO incluyas "km" — el sistema escala el radio automáticamente.
+
+## INTERPRETANDO LENGUAJE NATURAL EN PRECIOS Y CIFRAS
+Convierte expresiones coloquiales a números exactos antes de llamar a la función: "medio millón" -> 500000, "un millón y medio" -> 1500000, "2.5 millones" -> 2500000, "20 mil pesos al mes" -> 20000, "menos de 3 millones" -> Precio_max: 3000000, "entre 2 y 3 millones" -> Precio_min: 2000000, Precio_max: 3000000.
 
 ## TIPOS DE INMUEBLES
 Con habitaciones/baños/pisos: Casa, Departamento, Rancho, Cabaña, Quinta
 Solo baños/pisos: Oficina, Local Comercial
 Sin esas características: Terreno, Bodega Comercial, Nave Industrial, Bodega Industrial
+Reconoce sinónimos y coloquialismos: "depa"/"depto" = Departamento, "bodega" = Bodega Comercial, "terrenito"/"lote" = Terreno, "oficinas" = Oficina.
 
 ## REGLA: SIEMPRE BUSCAR PRIMERO
-Ante cualquier mención de propiedad, zona o característica -> llama a buscarPropiedades INMEDIATAMENTE.
+Ante cualquier mención de propiedad, zona o característica -> llama a buscarPropiedades INMEDIATAMENTE. No pidas confirmación antes de buscar; busca y luego ofrece refinar.
 
 ${locationContext}`;
 }
@@ -88,22 +98,33 @@ export const CHAT_TOOLS = [{
   type: 'function',
   function: {
     name: 'buscarPropiedades',
-    description: 'Busca propiedades en DotCasa.',
+    description: 'Busca propiedades inmobiliarias en DotCasa según los criterios que el usuario haya mencionado, explícita o implícitamente, en el mensaje actual y en el historial de la conversación.',
     parameters: {
       type: 'object',
       properties: {
-        tipoInmueble:    { type: 'array', items: { type: 'string' } },
-        tipoOperación:   { type: 'array', items: { type: 'string' } },
-        Habitaciones:    { type: 'number' },
-        Banos:           { type: 'number' },
-        Pisos:           { type: 'number' },
-        Precio_min:      { type: 'number' },
-        Precio_max:      { type: 'number' },
-        M2_cons_min:     { type: 'number' },
-        M2_terreno_min:  { type: 'number' },
-        Locacion:        { type: 'string' },
-        km:              { type: 'number' },
-        exactMatch:      { type: 'string', enum: ['yes', 'no'] }
+        tipoInmueble: {
+          type: 'array',
+          items: { type: 'string', enum: ['Casa', 'Departamento', 'Rancho', 'Cabaña', 'Quinta', 'Oficina', 'Local Comercial', 'Terreno', 'Bodega Comercial', 'Nave Industrial', 'Bodega Industrial'] },
+          description: 'Tipo(s) de inmueble que busca el usuario. Reconoce sinónimos y coloquialismos (depa/depto = Departamento, lote/terrenito = Terreno, etc). Si no se menciona ninguno, omite el parámetro.'
+        },
+        tipoOperación: {
+          type: 'array',
+          items: { type: 'string', enum: ['venta', 'renta'] },
+          description: 'Si el usuario quiere comprar ("venta") o rentar ("renta"), en minúsculas. Omite si no lo especifica.'
+        },
+        Habitaciones: { type: 'number', description: 'Número mínimo de recámaras/habitaciones deseadas.' },
+        Banos:        { type: 'number', description: 'Número mínimo de baños deseados.' },
+        Pisos:        { type: 'number', description: 'Número de pisos/niveles deseados (solo aplica a Casa, Departamento, Oficina, Local Comercial).' },
+        Precio_min:   { type: 'number', description: 'Presupuesto mínimo en pesos mexicanos (MXN). Convierte lenguaje natural: "medio millón" = 500000, "2.5 millones" = 2500000.' },
+        Precio_max:   { type: 'number', description: 'Presupuesto máximo en pesos mexicanos (MXN). Convierte lenguaje natural igual que Precio_min. Usa este campo cuando el usuario diga "menos de X" o dé un tope de presupuesto o renta mensual.' },
+        M2_cons_min:  { type: 'number', description: 'Metros cuadrados de construcción mínimos deseados.' },
+        M2_terreno_min: { type: 'number', description: 'Metros cuadrados de terreno mínimos deseados.' },
+        Locacion: {
+          type: 'string',
+          description: 'Referencia geográfica más específica mencionada por el usuario: colonia, ciudad, estado, dirección, o un landmark/punto de referencia (ej. "cerca del Tec de Monterrey", "por el aeropuerto"). Se geocodifica automáticamente con Mapbox, así que cualquier lugar reconocible sirve.'
+        },
+        km: { type: 'number', description: 'Radio de búsqueda en kilómetros, SOLO si el usuario lo indica explícitamente (ej. "en un radio de 5 km"). No lo incluyas si no lo menciona; el sistema escala el radio automáticamente.' },
+        exactMatch: { type: 'string', enum: ['yes', 'no'], description: 'Usa "yes" cuando el usuario pide coincidencia estricta con todos los criterios; en general omite este parámetro y deja el comportamiento por defecto.' }
       }
     }
   }

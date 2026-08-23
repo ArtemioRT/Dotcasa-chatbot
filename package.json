@@ -1,7 +1,7 @@
 {
   "name": "dotcasa-chatbot",
   "version": "1.0.0",
-  "description": "DotCasa — asistente inmobiliario AI (GPT-4o-mini + Bubble + Nominatim)",
+  "description": "DotCasa — asistente inmobiliario AI (GPT-4o-mini + Bubble + Mapbox)",
   "type": "module",
   "main": "server.js",
   "scripts": {

@@ -1,17 +1,23 @@
 // ============================================================================
-// GEOCODING — Nominatim, caché, parseo de coordenadas y clasificación
+// GEOCODING — Mapbox, caché, parseo de coordenadas y clasificación
 // ============================================================================
 import axios from 'axios';
-import { NOMINATIM_UA } from '../../shared/config.js';
-import { normalizeSearchText } from '../../shared/utils.js';
+import { MAPBOX_ACCESS_TOKEN } from '../../shared/config.js';
+import { normalizeSearchText, parseBubbleNumber } from '../../shared/utils.js';
 
 const geoCache = new Map();
 const locationTypeCache = new Map();
+
+const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places';
 
 export const MONTERREY_METRO_HINTS = [
   'cumbres', 'monterrey', 'san pedro', 'guadalupe', 'apodaca',
   'santa catarina', 'san nicolas', 'escobedo'
 ];
+
+// Centro aproximado del área metropolitana de Monterrey, usado como sesgo de
+// proximidad en Mapbox para desambiguar colonias/lugares con nombres comunes.
+const MONTERREY_PROXIMITY = [-100.3161, 25.6866]; // [lng, lat]
 
 export function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -22,6 +28,8 @@ export function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Legacy: algunos registros viejos de Bubble aún pueden traer "lat,lng" en
+// vez de una dirección formateada. Se conserva como fallback de parseo.
 export function parseLocacion(locacion) {
   if (!locacion || typeof locacion !== 'string') return null;
   const parts = locacion.split(',').map(s => s.trim());
@@ -44,81 +52,99 @@ export function parseLocacion(locacion) {
   return null;
 }
 
+// Extrae Latitud/Longitud numéricas directas de una propiedad de Bubble.
+export function parsePropertyCoords(prop) {
+  const lat = parseBubbleNumber(prop?.['Latitud'] ?? prop?.['latitud']);
+  const lng = parseBubbleNumber(prop?.['Longitud'] ?? prop?.['longitud']);
+  if (lat !== null && lng !== null && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+    return { lat, lng };
+  }
+  // Fallback a registros legacy donde Locación aún trae "lat,lng"
+  return parseLocacion(prop?.['Locación'] || prop?.['Locacion'] || prop?.['locacion']);
+}
+
 export function buildGeocodeQuery(locacion) {
   let query = String(locacion || '').trim().replace(/\s+/g, ' ');
   const normalized = normalizeSearchText(query);
   if (MONTERREY_METRO_HINTS.some(hint => normalized.includes(hint)) && !normalized.includes('nuevo leon')) {
     query = `${query}, Nuevo León`;
   }
-  if (!normalizeSearchText(query).includes('mexico')) {
-    query = `${query}, México`;
-  }
   return query;
+}
+
+function shouldBiasToMonterrey(query) {
+  const normalized = normalizeSearchText(query);
+  return MONTERREY_METRO_HINTS.some(hint => normalized.includes(hint));
 }
 
 export async function geocodeLocation(locacion) {
   if (!locacion) return null;
+  if (!MAPBOX_ACCESS_TOKEN) {
+    console.error('Geocoding error: MAPBOX_ACCESS_TOKEN no configurado');
+    return null;
+  }
   const directCoords = parseLocacion(locacion);
   if (directCoords) return { ...directCoords, displayName: locacion };
   const query = buildGeocodeQuery(locacion);
-  if (geoCache.has(query)) {
-    const cached = geoCache.get(query);
-    return cached;
-  }
+  if (geoCache.has(query)) return geoCache.get(query);
   try {
-    const res = await axios.get('https://nominatim.openstreetmap.org/search', {
-      params: { q: query, format: 'json', limit: 1, addressdetails: 1 },
-      headers: { 'User-Agent': NOMINATIM_UA },
+    const res = await axios.get(`${MAPBOX_GEOCODE_URL}/${encodeURIComponent(query)}.json`, {
+      params: {
+        access_token: MAPBOX_ACCESS_TOKEN,
+        country: 'mx',
+        language: 'es',
+        limit: 1,
+        ...(shouldBiasToMonterrey(query) ? { proximity: MONTERREY_PROXIMITY.join(',') } : {})
+      },
       timeout: 8000
     });
-    if (!res.data?.length) return null;
-    const r = res.data[0];
+    const feature = res.data?.features?.[0];
+    if (!feature) return null;
+    const [lng, lat] = feature.center;
     const coords = {
-      lat: parseFloat(r.lat),
-      lng: parseFloat(r.lon),
-      displayName: r.display_name,
-      address: r.address || {}
+      lat, lng,
+      displayName: feature.place_name,
+      context: feature.context || []
     };
     geoCache.set(query, coords);
     return coords;
   } catch (err) {
-    console.error('Geocoding error:', err.message);
+    console.error('Geocoding error:', err.response?.data?.message || err.message);
     return null;
   }
 }
 
-export async function classifyLocationPartNominatim(part) {
+function classifyMapboxFeature(feature) {
+  const types = feature?.place_type || [];
+  if (types.includes('region')) return 'estado';
+  if (types.includes('place') || types.includes('locality')) return 'ciudad';
+  if (types.includes('neighborhood') || types.includes('district') || types.includes('address') || types.includes('poi')) return 'colonia';
+  return 'colonia';
+}
+
+export async function classifyLocationPartMapbox(part) {
   const key = normalizeSearchText(part);
   if (!key) return 'colonia';
   if (locationTypeCache.has(key)) return locationTypeCache.get(key);
+  if (!MAPBOX_ACCESS_TOKEN) return 'colonia';
   try {
-    const query = `${part}, México`;
-    const res = await axios.get('https://nominatim.openstreetmap.org/search', {
-      params: { q: query, format: 'json', limit: 1, addressdetails: 1, 'accept-language': 'es' },
-      headers: { 'User-Agent': NOMINATIM_UA },
+    const res = await axios.get(`${MAPBOX_GEOCODE_URL}/${encodeURIComponent(part)}.json`, {
+      params: {
+        access_token: MAPBOX_ACCESS_TOKEN,
+        country: 'mx',
+        language: 'es',
+        limit: 1,
+        types: 'region,place,locality,district,neighborhood,address',
+        ...(shouldBiasToMonterrey(part) ? { proximity: MONTERREY_PROXIMITY.join(',') } : {})
+      },
       timeout: 8000
     });
-    if (!res.data?.length) {
-      locationTypeCache.set(key, 'colonia');
-      return 'colonia';
-    }
-    const r = res.data[0];
-    const cls = r.class || '';
-    const type = r.type || '';
-    let classification = 'colonia';
-    if (r.addresstype === 'state' || type === 'state' || (cls === 'boundary' && type === 'administrative' && r.address?.state && !r.address?.city && !r.address?.town)) {
-      classification = 'estado';
-    } else if ((cls === 'place' && ['city', 'town', 'village'].includes(type)) || ['city', 'town', 'village', 'municipality'].includes(r.addresstype)) {
-      classification = 'ciudad';
-    } else if ((cls === 'place' && ['suburb', 'neighbourhood', 'quarter', 'hamlet'].includes(type)) || ['suburb', 'neighbourhood', 'quarter'].includes(r.addresstype)) {
-      classification = 'colonia';
-    } else if (r.address?.state && !r.address?.city && !r.address?.town && !r.address?.suburb) {
-      classification = 'estado';
-    }
+    const feature = res.data?.features?.[0];
+    const classification = feature ? classifyMapboxFeature(feature) : 'colonia';
     locationTypeCache.set(key, classification);
     return classification;
   } catch (err) {
-    console.error(`Error clasificando "${part}":`, err.message);
+    console.error(`Error clasificando "${part}":`, err.response?.data?.message || err.message);
     locationTypeCache.set(key, 'colonia');
     return 'colonia';
   }
@@ -130,7 +156,7 @@ export async function parseLocacionSmart(locacion) {
   const parts = locacion.split(',').map(p => p.trim()).filter(Boolean);
   if (!parts.length) return result;
   if (parseLocacion(parts.join(','))) return result;
-  const classifications = await Promise.all(parts.map(p => classifyLocationPartNominatim(p)));
+  const classifications = await Promise.all(parts.map(p => classifyLocationPartMapbox(p)));
   parts.forEach((part, idx) => {
     const tipo = classifications[idx];
     if (result[tipo]) result[tipo].push(part);
