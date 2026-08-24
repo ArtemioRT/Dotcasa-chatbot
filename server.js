@@ -6,11 +6,12 @@
 import { logger } from './src/shared/logger.js';
 import express from 'express';
 import cors from 'cors';
-import {
-  PORT, APP_VERSION, BUILD_TAG,
-  GCS_BUCKET_NAME, DEBUG_DUMP_PREFIX, DEBUG_DUMP_MODE,
-  BUBBLE_SEARCH_URL, OPENAI_API_KEY, MAPBOX_ACCESS_TOKEN
-} from './src/shared/config.js';
+// Import de namespace a propósito: con imports nombrados, un config.js
+// desactualizado revienta el arranque con SyntaxError antes de ejecutar nada.
+// Así los campos que falten quedan en undefined y el servicio sigue vivo.
+import * as config from './src/shared/config.js';
+
+const PORT = config.PORT || 3000;
 import chatbotRoutes from './src/modules/chatbot/chat.routes.js';
 
 const app = express();
@@ -71,11 +72,13 @@ app.listen(PORT, '0.0.0.0', () => {
   logger.info(`dotcasa-chatbot inicializado en puerto ${PORT}`);
   // Banner de diagnóstico: confirma qué build corre y qué está configurado,
   // para no confundir una imagen vieja con un problema de código.
-  logger.info(`BUILD v${APP_VERSION} [${BUILD_TAG}]`);
+  // Si aparece "DESACTUALIZADO", el config.js desplegado no es el de este build.
+  logger.info(`BUILD v${config.APP_VERSION ?? 'DESACTUALIZADO'} [${config.BUILD_TAG ?? 'config.js viejo'}]`);
   logger.info(
-    `Config | Bubble:${BUBBLE_SEARCH_URL ? 'ok' : 'FALTA'}` +
-    ` OpenAI:${OPENAI_API_KEY ? 'ok' : 'FALTA'}` +
-    ` Mapbox:${MAPBOX_ACCESS_TOKEN ? 'ok' : 'FALTA'}` +
-    ` | volcado:${DEBUG_DUMP_MODE} -> gs://${GCS_BUCKET_NAME}/${DEBUG_DUMP_PREFIX}/`
+    `Config | Bubble:${config.BUBBLE_SEARCH_URL ? 'ok' : 'FALTA'}` +
+    ` OpenAI:${config.OPENAI_API_KEY ? 'ok' : 'FALTA'}` +
+    ` Mapbox:${config.MAPBOX_ACCESS_TOKEN ? 'ok' : 'FALTA'}` +
+    ` | volcado:${config.DEBUG_DUMP_MODE ?? 'no configurado'}` +
+    ` -> gs://${config.GCS_BUCKET_NAME ?? '?'}/${config.DEBUG_DUMP_PREFIX ?? '?'}/`
   );
 });
