@@ -73,11 +73,27 @@ Usa el historial de la conversación como contexto persistente: si el usuario ya
 ## IMPORTANTE: SÓLO MENCIONA CARACTERÍSTICAS QUE APAREZCAN EN propiedadesMostradas
 NO inventes ni asumas características. Usa EXACTAMENTE los valores reales.
 
-## PARÁMETRO "Locacion"
-Captura SIEMPRE en "Locacion" la referencia geográfica más específica que mencione el usuario: colonia, ciudad, estado, dirección o incluso un landmark/punto de referencia ("cerca del Tec de Monterrey", "junto a Plaza Fiesta San Agustín", "por el aeropuerto"). El sistema geocodifica cualquiera de estos con Mapbox, así que no necesitas que sea una dirección formal.
+## UBICACIÓN: DOS CONCEPTOS DISTINTOS — NO LOS MEZCLES
+Hay dos formas de ubicar una propiedad y debes elegir la correcta:
 
-## PARÁMETRO "km"
-Si el usuario menciona un radio específico ("en un radio de 5 km", "que esté a máximo 10 minutos"), usa ese valor aproximado. Si NO lo menciona, NO incluyas "km" — el sistema escala el radio automáticamente.
+**1) Ubicación ADMINISTRATIVA (por nombre)** -> campos "Ciudad", "Estado", "Colonia".
+Úsala cuando el usuario nombra un lugar como ZONA. Una ciudad NO es un punto: "propiedades en Monterrey" significa que la propiedad pertenece a Monterrey, no que esté a X km del centro.
+- "Casas en Monterrey" -> Ciudad: "Monterrey", Estado: "Nuevo León"
+- "Algo en San Jerónimo" -> Colonia: "San Jerónimo"
+- "Departamentos en Cumbres, Monterrey" -> Colonia: "Cumbres", Ciudad: "Monterrey"
+- "Terrenos en Nuevo León" -> Estado: "Nuevo León"
+
+**2) Ubicación GEOGRÁFICA (por distancia)** -> campos "km" + ("Locacion" o "usarUbicacionUsuario").
+Úsala SOLO cuando el usuario habla de distancia o de un punto de referencia que no es ciudad ni colonia.
+- "Casas a 5 km de Cumbres" -> Colonia: "Cumbres", km: 5
+- "Algo a 10 km de aquí" -> usarUbicacionUsuario: true, km: 10
+- "Cerca del Tec de Monterrey" -> Locacion: "Tec de Monterrey", km: 5
+- "A máximo 15 minutos del aeropuerto" -> Locacion: "aeropuerto de Monterrey", km: 15
+
+REGLA CRÍTICA: NUNCA pongas "km" solo porque el usuario mencionó una ciudad o colonia. Si dice "casas en Monterrey", va Ciudad, SIN km. Poner un radio ahí descarta propiedades legítimas de la ciudad.
+
+## COLONIAS CON VARIANTES
+Muchas colonias tienen sectores ("Cumbres Elite", "Cumbres 1er Sector", "Cumbres 3er Sector"). Pon siempre el nombre BASE en "Colonia" ("Cumbres"), nunca el sector específico, para no perder resultados. El sistema se encarga de encontrar las variantes.
 
 ## INTERPRETANDO LENGUAJE NATURAL EN PRECIOS Y CIFRAS
 Convierte expresiones coloquiales a números exactos antes de llamar a la función: "medio millón" -> 500000, "un millón y medio" -> 1500000, "2.5 millones" -> 2500000, "20 mil pesos al mes" -> 20000, "menos de 3 millones" -> Precio_max: 3000000, "entre 2 y 3 millones" -> Precio_min: 2000000, Precio_max: 3000000.
@@ -119,11 +135,30 @@ export const CHAT_TOOLS = [{
         Precio_max:   { type: 'number', description: 'Presupuesto máximo en pesos mexicanos (MXN). Convierte lenguaje natural igual que Precio_min. Usa este campo cuando el usuario diga "menos de X" o dé un tope de presupuesto o renta mensual.' },
         M2_cons_min:  { type: 'number', description: 'Metros cuadrados de construcción mínimos deseados.' },
         M2_terreno_min: { type: 'number', description: 'Metros cuadrados de terreno mínimos deseados.' },
+        Ciudad: {
+          type: 'string',
+          description: 'Ciudad o municipio mencionado, cuando el usuario habla de la ciudad como zona (ej. "en Monterrey", "en Guadalupe"). Escríbela completa y bien acentuada. NO la uses para colonias ni para landmarks.'
+        },
+        Estado: {
+          type: 'string',
+          description: 'Estado de la República mencionado o claramente implícito por la ciudad (ej. Monterrey -> "Nuevo León", Guadalajara -> "Jalisco"). Rellénalo cuando lo sepas con certeza, ayuda a desambiguar ciudades homónimas.'
+        },
+        Colonia: {
+          type: 'string',
+          description: 'Colonia, fraccionamiento o zona dentro de una ciudad (ej. "Cumbres", "San Jerónimo", "Del Valle"). Usa el nombre base sin el sector ni número: si el usuario dice "Cumbres 3er Sector" pon "Cumbres" para no perder variantes. Si el usuario menciona colonia Y ciudad, llena ambos campos.'
+        },
+        km: {
+          type: 'number',
+          description: 'RADIO en kilómetros. Úsalo SOLO cuando el usuario hable en términos de DISTANCIA: "a 5 km de", "a máximo 10 minutos de", "en un radio de". NUNCA lo pongas por el simple hecho de que mencione una ciudad o colonia — esas van en Ciudad/Colonia y se filtran por nombre, no por distancia.'
+        },
+        usarUbicacionUsuario: {
+          type: 'boolean',
+          description: 'true cuando el usuario se refiere a su propia posición: "cerca de aquí", "cerca de mí", "en mi zona", "a 10 km de mi ubicación". Normalmente va acompañado de km.'
+        },
         Locacion: {
           type: 'string',
-          description: 'Referencia geográfica más específica mencionada por el usuario: colonia, ciudad, estado, dirección, o un landmark/punto de referencia (ej. "cerca del Tec de Monterrey", "por el aeropuerto"). Se geocodifica automáticamente con Mapbox, así que cualquier lugar reconocible sirve.'
+          description: 'Punto de referencia a geocodificar SOLO para búsquedas por distancia o landmarks que no son ciudad ni colonia (ej. "el Tec de Monterrey", "Plaza Fiesta San Agustín", "el aeropuerto"). Si el lugar es una ciudad o una colonia, usa Ciudad/Colonia en su lugar, NO este campo.'
         },
-        km: { type: 'number', description: 'Radio de búsqueda en kilómetros, SOLO si el usuario lo indica explícitamente (ej. "en un radio de 5 km"). No lo incluyas si no lo menciona; el sistema escala el radio automáticamente.' },
         exactMatch: { type: 'string', enum: ['yes', 'no'], description: 'Usa "yes" cuando el usuario pide coincidencia estricta con todos los criterios; en general omite este parámetro y deja el comportamiento por defecto.' }
       }
     }

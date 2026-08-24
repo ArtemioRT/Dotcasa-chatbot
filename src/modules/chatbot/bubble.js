@@ -42,6 +42,11 @@ export async function searchBubble(params) {
   if (params.Precio_max     != null) q.append('Precio_max',     params.Precio_max);
   if (params.M2_cons_min    != null) q.append('M2_cons_min',    params.M2_cons_min);
   if (params.M2_terreno_min != null) q.append('M2_terreno_min', params.M2_terreno_min);
+  // Ubicación administrativa: se filtra por nombre en Bubble (Ciudad/Estado/Colonia).
+  if (params.Ciudad)                 q.append('Ciudad',         params.Ciudad);
+  if (params.Estado)                 q.append('Estado',         params.Estado);
+  if (params.Colonia)                q.append('Colonia',        params.Colonia);
+  // Ubicación geográfica: solo se manda cuando la búsqueda es por distancia.
   if (params.LocacionBubble)         q.append('Locacion',       params.LocacionBubble);
   else if (params.Locacion)          q.append('Locacion',       params.Locacion);
   if (params.km            != null)  q.append('km',             params.km);
@@ -100,6 +105,27 @@ export function filterPropertiesByLocationText(properties, locacion) {
     }
   }
   return { properties, matchType: 'none' };
+}
+
+// Anota Proximidad (km desde refCoords) sin descartar ninguna propiedad.
+// Se usa en búsquedas por ciudad/estado, donde la pertenencia la define el
+// match textual sobre Ciudad/Estado y el radio solo serviría para ordenar.
+export function annotateProximity(properties, refCoords) {
+  if (!refCoords) return properties;
+  const annotated = properties.map(prop => {
+    const existingProximity = parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']);
+    if (existingProximity !== null && !isNaN(existingProximity)) {
+      return { ...prop, Proximidad: parseFloat(existingProximity.toFixed(2)) };
+    }
+    const coords = parsePropertyCoords(prop);
+    if (coords && coords.lat && coords.lng && !isNaN(coords.lat) && !isNaN(coords.lng)) {
+      const d = haversineKm(refCoords.lat, refCoords.lng, coords.lat, coords.lng);
+      if (!isNaN(d)) return { ...prop, Proximidad: parseFloat(d.toFixed(2)) };
+    }
+    return { ...prop, Proximidad: null };
+  });
+  annotated.sort((a, b) => (a.Proximidad ?? Infinity) - (b.Proximidad ?? Infinity));
+  return annotated;
 }
 
 export function filterByProximity(properties, refCoords, radiusKm) {

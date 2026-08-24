@@ -10,12 +10,15 @@ import {
 import { parseBubbleNumber } from '../../shared/utils.js';
 import { geocodeLocation, parseLocacionSmart } from './geocoding.js';
 import {
-  searchBubble, filterByProximity, filterPropertiesByLocationText,
+  searchBubble, filterByProximity, annotateProximity,
   validateCriteriaMatch, getPropNum
 } from './bubble.js';
+import {
+  resolveLocationIntent, buildSearchPlan, filterByAdminLocation, SEARCH_MODE
+} from './locationSearch.js';
 import { classifyAndScoreProperties, formatProperties } from './scoring.js';
 import {
-  RADIUS_SCALE, buildSystemPrompt, CHAT_TOOLS,
+  buildSystemPrompt, CHAT_TOOLS,
   isSearchQuery, inferTipoInmuebleFromMessage,
   sanitizeParams, cleanHistory, extractFallbackLocacion
 } from './prompt.js';
@@ -63,98 +66,130 @@ router.post('/chat', async (req, res) => {
     if (inferredTipos.length > 0) params.tipoInmueble = inferredTipos;
     if (!params.Locacion && inferredMessageLocacion) params.Locacion = inferredMessageLocacion;
 
-    const userSpecifiedRadius = params.km !== undefined && params.km !== null;
+    // -----------------------------------------------------------------------
+    // 1) RESOLVER UBICACIÓN — convierte lo extraído por el LLM en una intención
+    //    estructurada y decide el modo (administrativo vs geográfico).
+    // -----------------------------------------------------------------------
+    // Si el LLM solo llenó "Locacion" con algo tipo "Cumbres, Monterrey",
+    // lo descomponemos en colonia/ciudad/estado con Mapbox antes de resolver.
+    if (params.Locacion && !params.Ciudad && !params.Colonia && !params.Estado) {
+      const parsed = await parseLocacionSmart(params.Locacion);
+      if (parsed.colonia.length) params.Colonia = parsed.colonia[0];
+      if (parsed.ciudad.length)  params.Ciudad  = parsed.ciudad[0];
+      if (parsed.estado.length)  params.Estado  = parsed.estado[0];
+      // Si resultó ser puramente administrativo, Locacion deja de ser un punto.
+      if ((params.Ciudad || params.Colonia || params.Estado) && params.km == null) {
+        params.Locacion = null;
+      }
+    }
+
+    const intent = resolveLocationIntent(params, userLocation);
+    const plan = buildSearchPlan(intent);
+    console.log(`Ubicación resuelta | modo=${intent.mode} ciudad=${intent.ciudad || '-'} colonia=${intent.colonia || '-'} estado=${intent.estado || '-'} km=${intent.km ?? '-'}`);
+    console.log(`Plan de búsqueda: ${plan.map(s => s.etiqueta).join(' -> ')}`);
+
+    const userSpecifiedRadius = intent.kmExplicito;
     let properties = [], usedRadius = null, isExactMatch = true, refCoords = null;
-    let geocodedDisplay = null, bubbleLocacion = params.Locacion || null;
-    let locationMatchType = params.Locacion ? 'none' : 'not_requested';
-    let locacionParsed = { colonia: [], ciudad: [], estado: [] };
+    let geocodedDisplay = null;
+    let locationMatchType = intent.mode === SEARCH_MODE.NONE ? 'not_requested' : 'none';
 
-    if (params.Locacion) {
-      const [geoResult, parsedResult] = await Promise.all([
-        geocodeLocation(params.Locacion),
-        parseLocacionSmart(params.Locacion)
-      ]);
-      refCoords = geoResult;
-      geocodedDisplay = refCoords?.displayName || params.Locacion;
-      locacionParsed = parsedResult;
+    // -----------------------------------------------------------------------
+    // 2) GEOCODIFICAR — solo si hace falta un punto de referencia.
+    // -----------------------------------------------------------------------
+    const necesitaCoords = plan.some(s => s.tipo === 'geo');
+    if (necesitaCoords) {
+      if (intent.gpsCoords) {
+        refCoords = intent.gpsCoords;
+        geocodedDisplay = 'Ubicación del usuario (GPS)';
+      } else if (intent.referencia) {
+        refCoords = await geocodeLocation(intent.referencia);
+        geocodedDisplay = refCoords?.displayName || intent.referencia;
+      }
     }
 
-    const hasColonia = locacionParsed.colonia.length > 0;
-    const hasCiudad  = locacionParsed.ciudad.length > 0;
-    const hasEstado  = locacionParsed.estado.length > 0;
-    const onlyEstado = hasEstado && !hasCiudad && !hasColonia;
+    // -----------------------------------------------------------------------
+    // 3) EJECUTAR EL PLAN — cada paso es una estrategia DISTINTA, no el mismo
+    //    query con otro radio. Se corta en cuanto un paso da resultados.
+    // -----------------------------------------------------------------------
+    const runStep = async (step) => {
+      const searchParams = { ...params };
+      // Cada paso define su propia ubicación; limpiamos lo que no aplique.
+      delete searchParams.Ciudad; delete searchParams.Estado; delete searchParams.Colonia;
+      delete searchParams.Locacion; delete searchParams.km;
 
-    let radiusScale;
-    let skipProximityFilter = false;
+      if (step.tipo === 'admin') {
+        if (step.ciudad)  searchParams.Ciudad  = step.ciudad;
+        if (step.estado)  searchParams.Estado  = step.estado;
+        if (step.colonia) searchParams.Colonia = step.colonia;
+      } else if (step.tipo === 'geo') {
+        if (!refCoords) return null; // sin punto de referencia no hay geo
+        searchParams.LocacionBubble = intent.referencia || null;
+        searchParams.km = step.km;
+      }
 
-    if (userSpecifiedRadius) {
-      radiusScale = [params.km];
-    } else if (onlyEstado) {
-      radiusScale = [200];
-      skipProximityFilter = true;
-    } else if (hasCiudad && !hasColonia) {
-      radiusScale = [5, 10, 20, 40, 80];
-    } else if (hasColonia) {
-      radiusScale = [2, 5, 10, 20, 40];
-    } else {
-      radiusScale = RADIUS_SCALE;
-    }
-
-    usedRadius = radiusScale[0];
-
-    const runBubbleSearchAttempt = async (radiusKm) => {
-      const searchParams = { ...params, LocacionBubble: bubbleLocacion };
-      if (radiusKm != null) searchParams.km = radiusKm;
       let results = await searchBubble(searchParams);
       let exactMatchUsed = true;
       if (searchParams.exactMatch === 'yes' && results.length === 0) {
         results = await searchBubble({ ...searchParams, exactMatch: 'no' });
         exactMatchUsed = false;
       }
+      const countBubble = results.length;
+
       results = results.filter(prop => validateCriteriaMatch(prop, params, false));
+      const countCriteria = results.length;
       const allExactMatch = results.length > 0 && results.every(prop => validateCriteriaMatch(prop, params, true));
-      const locationFiltered = filterPropertiesByLocationText(results, params.Locacion);
-      results = locationFiltered.properties;
-      if (radiusKm != null && refCoords && !skipProximityFilter) {
-        results = filterByProximity(results, refCoords, radiusKm);
+
+      let matchType = 'not_requested';
+      if (step.tipo === 'admin') {
+        // Filtro por NOMBRE sobre Ciudad/Estado/Colonia. Sin radio: una ciudad
+        // no es un punto, así que la distancia solo se anota para ordenar.
+        const adminFiltered = filterByAdminLocation(results, {
+          ciudad: step.ciudad, estado: step.estado, colonia: step.colonia
+        });
+        results = adminFiltered.properties;
+        matchType = adminFiltered.matchType;
+        if (refCoords) results = annotateProximity(results, refCoords);
+      } else if (step.tipo === 'geo') {
+        results = filterByProximity(results, refCoords, step.km);
+        matchType = results.length ? 'geo' : 'none';
       }
-      return { results, exactMatchUsed: exactMatchUsed && allExactMatch, locationMatchType: locationFiltered.matchType };
+
+      console.log(`  [${step.etiqueta}] Bubble: ${countBubble} -> criterios: ${countCriteria} -> ubicación: ${results.length}`);
+      return {
+        results,
+        exactMatchUsed: exactMatchUsed && allExactMatch,
+        locationMatchType: matchType,
+        radiusKm: step.tipo === 'geo' ? step.km : null
+      };
     };
 
-    if (skipProximityFilter) {
-      const estadoRadius = radiusScale[0];
-      const attempt = await runBubbleSearchAttempt(estadoRadius);
-      properties = attempt.results;
-      if (!attempt.exactMatchUsed) isExactMatch = false;
-      locationMatchType = attempt.locationMatchType;
-      usedRadius = estadoRadius;
-    } else if (refCoords) {
-      let bestAttempt = null, bestClassified = null, bestRadius = radiusScale[0];
-      for (const radius of radiusScale) {
-        usedRadius = radius;
-        const attempt = await runBubbleSearchAttempt(radius);
-        const tempClassified = classifyAndScoreProperties(attempt.results, params, refCoords);
-        const visibleCount = tempClassified.allClassified.length;
-        if (!bestClassified || visibleCount > bestClassified.allClassified.length) {
-          bestAttempt = attempt; bestClassified = tempClassified; bestRadius = radius;
+    let usedStep = null;
+    for (const step of plan) {
+      if (step.tipo === 'none') {
+        const attempt = await runStep({ ...step, tipo: 'admin' });
+        if (attempt) {
           properties = attempt.results;
           if (!attempt.exactMatchUsed) isExactMatch = false;
           locationMatchType = attempt.locationMatchType;
+          usedStep = step;
         }
-        if (visibleCount >= MIN_VISIBLE_TARGET) break;
+        break;
       }
-      usedRadius = bestRadius;
-      if (bestAttempt) {
-        properties = bestAttempt.results;
-        if (!bestAttempt.exactMatchUsed) isExactMatch = false;
-        locationMatchType = bestAttempt.locationMatchType;
+      const attempt = await runStep(step);
+      if (!attempt) continue;
+      const visibles = classifyAndScoreProperties(attempt.results, params, refCoords).allClassified.length;
+      // Nos quedamos con el primer paso que produzca resultados visibles.
+      if (visibles > 0 || (!usedStep && attempt.results.length > 0)) {
+        properties = attempt.results;
+        if (!attempt.exactMatchUsed) isExactMatch = false;
+        locationMatchType = attempt.locationMatchType;
+        usedRadius = attempt.radiusKm;
+        usedStep = step;
+        break;
       }
-    } else {
-      const attempt = await runBubbleSearchAttempt(userSpecifiedRadius ? usedRadius : null);
-      if (!attempt.exactMatchUsed) isExactMatch = false;
-      locationMatchType = attempt.locationMatchType;
-      properties = attempt.results;
+      if (!usedStep) { usedStep = step; usedRadius = attempt.radiusKm; }
     }
+    if (usedStep) console.log(`Estrategia usada: ${usedStep.etiqueta} | ${properties.length} propiedades`);
 
     const { exacta, cumple, cercana, recomendada, descartada, top3, allClassified } = classifyAndScoreProperties(properties, params, refCoords);
     const totalCount = allClassified.length;
@@ -171,10 +206,16 @@ router.post('/chat', async (req, res) => {
       score: prop.__score__
     }));
 
+    const pidioUbicacion = intent.mode !== SEARCH_MODE.NONE;
+    // Descripción legible de la ubicación efectivamente buscada.
+    const ubicacionBuscada = pidioUbicacion
+      ? ([intent.colonia, intent.ciudad, intent.estado].filter(Boolean).join(', ') || intent.referencia)
+      : null;
+
     const isCriteriaExactMatch = isExactMatch;
-    const isLocationExactMatch = locationMatchType === 'exact';
-    const overallExactMatch = isCriteriaExactMatch && (!params.Locacion || isLocationExactMatch);
-    const legacyExactMatch = params.Locacion ? isLocationExactMatch : isCriteriaExactMatch;
+    const isLocationExactMatch = locationMatchType === 'exact' || locationMatchType === 'geo';
+    const overallExactMatch = isCriteriaExactMatch && (!pidioUbicacion || isLocationExactMatch);
+    const legacyExactMatch = pidioUbicacion ? isLocationExactMatch : isCriteriaExactMatch;
 
     const histWithTool = [
       ...conversationHistory, assistantMsg,
@@ -185,9 +226,12 @@ router.post('/chat', async (req, res) => {
           displayedCount: displayProperties.length,
           isExactMatch: legacyExactMatch, isCriteriaExactMatch,
           isOverallExactMatch: overallExactMatch, isLocationExactMatch,
-          locationMatchType, ubicacionBuscada: params.Locacion || null,
+          locationMatchType, ubicacionBuscada,
           ubicacionGeocoded: geocodedDisplay, radiusKm: usedRadius,
           radiusAutoScaled: !userSpecifiedRadius && totalCount > 0,
+          // Cómo se buscó: por nombre (ciudad/colonia/estado) o por distancia.
+          modoBusqueda: intent.mode,
+          estrategiaUsada: usedStep?.etiqueta || null,
           clasificacion: {
             exacta: exacta.length, cumple: cumple.length, cercana: cercana.length,
             recomendada: recomendada.length, descartada: descartada.length,
@@ -198,6 +242,7 @@ router.post('/chat', async (req, res) => {
             habitaciones: params.Habitaciones || null, banos: params.Banos || null,
             precio_min: params.Precio_min || null, precio_max: params.Precio_max || null,
             tipoOperacion: params.tipoOperación?.join(', ') || null,
+            ciudad: intent.ciudad, colonia: intent.colonia, estado: intent.estado,
             tipo: params.tipoInmueble || []
           },
           sugerenciasAlternativas: totalCount === 0 ? {
@@ -205,13 +250,14 @@ router.post('/chat', async (req, res) => {
             posiblesCausas: [
               params.Habitaciones ? `Pocos resultados de ${params.Habitaciones} recamaras en esta zona` : '',
               params.Precio_max ? `Criterios restrictivos` : '',
-              params.Locacion ? `Zona con pocos datos` : 'Sin ubicacion'
+              pidioUbicacion ? `Zona con pocos datos` : 'Sin ubicacion'
             ].filter(Boolean),
             alternativas: [
               params.Habitaciones ? `Flexibilizar recamaras` : '',
               params.Precio_max ? `Expandir presupuesto` : '',
               params.tipoOperación?.includes('venta') ? `Incluir opciones de renta` : '',
-              params.Locacion ? `Buscar en municipios cercanos` : '',
+              intent.colonia ? `Ampliar de la colonia a toda la ciudad` : '',
+              intent.ciudad ? `Buscar en municipios cercanos` : '',
               `Cambiar tipo de inmueble`
             ].filter(Boolean)
           } : null
@@ -263,10 +309,11 @@ router.post('/chat', async (req, res) => {
       },
       scoring: { version: '2.3', engine: 'Multi-factor balanceado' },
       ubicacion: {
-        query: params.Locacion || null, geocoded: geocodedDisplay,
+        query: intent.referencia || null, geocoded: geocodedDisplay,
         lat: refCoords?.lat || null, lng: refCoords?.lng || null,
         radiusKm: usedRadius, radiusAutoScaled: !userSpecifiedRadius && totalCount > 0,
-        colonia: locacionParsed.colonia, ciudad: locacionParsed.ciudad, estado: locacionParsed.estado
+        modo: intent.mode, estrategia: usedStep?.etiqueta || null,
+        colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado
       },
       updatedHistory
     });
