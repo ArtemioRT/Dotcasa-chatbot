@@ -5,30 +5,114 @@ import axios from 'axios';
 import { BUBBLE_SEARCH_URL } from '../../shared/config.js';
 import { httpsAgent } from '../../shared/httpAgents.js';
 import { normalizeComparableText, parseBubbleNumber } from '../../shared/utils.js';
+import { dumpPayloadToGCS, dumpEnabled } from '../../shared/gcsDebug.js';
 import { parsePropertyCoords, haversineKm } from './geocoding.js';
 
-export function parseBubbleProperties(raw) {
-  if (typeof raw === 'string') {
-    let normalized = raw.replace(/"(Proximidad|Latitud|Longitud)":\s*(-?\d+),(\d+)/g, '"$1":$2.$3');
-    normalized = normalized.replace(/"(Proximidad|Latitud|Longitud)":\s*[\n\r]*\s*([},])/g, '"$1":null$2');
-    normalized = normalized.replace(/"(Pisos|N_Banos|N_Habitaciones|Precio|M2_Terreno|M2_Construccion|Latitud|Longitud)":\s*""\s*([},])/g, '"$1":null$2');
-    normalized = normalized.replace(/"(Antiguedad|Ciudad|Estado|Colonia)":\s*""\s*([},])/g, '"$1":null$2');
-    try {
-      const parsed = JSON.parse(`[${normalized}]`);
-      return parsed;
-    } catch (err) {
-      console.error(`Bubble JSON parse error: ${err.message}`);
-      try {
-        const aggressive = normalized.replace(/"\w+":\s*[\n\r]*\s*([},])/g, '"_removed":null$1');
-        const parsed = JSON.parse(`[${aggressive}]`);
-        return parsed;
-      } catch (err2) {
-        return [];
+// Posición que reporta V8 en "... in JSON at position 163556".
+function extraerPosicionError(mensaje) {
+  const m = /position (\d+)/.exec(mensaje || '');
+  return m ? Number(m[1]) : null;
+}
+
+// Recorta el texto alrededor del error para verlo directo en los logs, sin
+// tener que abrir el volcado completo.
+function recorteAlrededor(texto, pos, radio = 180) {
+  if (pos == null || !texto) return null;
+  const ini = Math.max(0, pos - radio);
+  const fin = Math.min(texto.length, pos + radio);
+  return {
+    antes: texto.slice(ini, pos),
+    despues: texto.slice(pos, fin),
+    posicion: pos
+  };
+}
+
+// Separa objetos JSON concatenados respetando strings y escapes, para poder
+// parsearlos de uno en uno. Así un registro corrupto no invalida el resto.
+function separarObjetos(texto) {
+  const objetos = [];
+  let profundidad = 0, inicio = -1, enString = false, escapado = false;
+  for (let i = 0; i < texto.length; i++) {
+    const ch = texto[i];
+    if (escapado) { escapado = false; continue; }
+    if (enString) {
+      if (ch === '\\') escapado = true;
+      else if (ch === '"') enString = false;
+      continue;
+    }
+    if (ch === '"') { enString = true; continue; }
+    if (ch === '{') { if (profundidad === 0) inicio = i; profundidad++; }
+    else if (ch === '}') {
+      profundidad--;
+      if (profundidad === 0 && inicio !== -1) {
+        objetos.push({ texto: texto.slice(inicio, i + 1), offset: inicio });
+        inicio = -1;
       }
+      if (profundidad < 0) profundidad = 0; // resincroniza ante basura suelta
     }
   }
-  if (Array.isArray(raw)) return raw;
-  return [];
+  return objetos;
+}
+
+/**
+ * Parsea la respuesta de Bubble con diagnóstico. Si el parseo completo falla,
+ * intenta rescatar los objetos válidos uno por uno en vez de devolver nada.
+ * Devuelve { properties, error, normalized, rescatadas, descartadas, recorte }.
+ */
+export function parseBubblePropertiesDetailed(raw) {
+  if (Array.isArray(raw)) {
+    return { properties: raw, error: null, normalized: null, rescatadas: 0, descartadas: 0, recorte: null };
+  }
+  if (typeof raw !== 'string') {
+    return { properties: [], error: null, normalized: null, rescatadas: 0, descartadas: 0, recorte: null };
+  }
+
+  let normalized = raw.replace(/"(Proximidad|Latitud|Longitud)":\s*(-?\d+),(\d+)/g, '"$1":$2.$3');
+  normalized = normalized.replace(/"(Proximidad|Latitud|Longitud)":\s*[\n\r]*\s*([},])/g, '"$1":null$2');
+  normalized = normalized.replace(/"(Pisos|N_Banos|N_Habitaciones|Precio|M2_Terreno|M2_Construccion|Latitud|Longitud)":\s*""\s*([},])/g, '"$1":null$2');
+  normalized = normalized.replace(/"(Antiguedad|Ciudad|Estado|Colonia)":\s*""\s*([},])/g, '"$1":null$2');
+
+  try {
+    return {
+      properties: JSON.parse(`[${normalized}]`),
+      error: null, normalized, rescatadas: 0, descartadas: 0, recorte: null
+    };
+  } catch (err) {
+    // El wrapper "[" desplaza las posiciones en 1 respecto al texto normalizado.
+    const posEnWrapper = extraerPosicionError(err.message);
+    const pos = posEnWrapper != null ? Math.max(0, posEnWrapper - 1) : null;
+    const recorte = recorteAlrededor(normalized, pos);
+
+    console.error(`Bubble JSON parse error: ${err.message}`);
+    if (recorte) {
+      console.error(`  ...${recorte.antes.slice(-160)}`);
+      console.error(`  >>> AQUÍ (pos ${recorte.posicion}) >>> ${recorte.despues.slice(0, 160)}...`);
+    }
+
+    // Rescate por objeto: se conserva todo lo que sí parsea.
+    const objetos = separarObjetos(normalized);
+    const properties = [];
+    let descartadas = 0;
+    for (const obj of objetos) {
+      try {
+        properties.push(JSON.parse(obj.texto));
+      } catch (errObj) {
+        descartadas++;
+        if (descartadas <= 3) {
+          console.error(`  Registro descartado en offset ${obj.offset}: ${errObj.message}`);
+          console.error(`  Fragmento: ${obj.texto.slice(0, 240)}`);
+        }
+      }
+    }
+    console.error(`Rescate por objeto: ${properties.length} válidas, ${descartadas} descartadas de ${objetos.length}`);
+
+    return { properties, error: err, normalized, rescatadas: properties.length, descartadas, recorte };
+  }
+}
+
+// Envoltorio compatible: devuelve solo el array de propiedades.
+export function parseBubbleProperties(raw) {
+  return parseBubblePropertiesDetailed(raw).properties;
 }
 
 export async function searchBubble(params) {
@@ -59,8 +143,28 @@ export async function searchBubble(params) {
   const data = res.data;
   const raw = data.response?.Propiedades || data.Propiedades;
 
-  let properties = parseBubbleProperties(raw);
+  const parsed = parseBubblePropertiesDetailed(raw);
+  let properties = parsed.properties;
   if (!properties.length && Array.isArray(data)) properties = data;
+
+  // Volcado a GCS para inspeccionar el payload exacto que rompió el parseo.
+  if (dumpEnabled(Boolean(parsed.error))) {
+    const gsUri = await dumpPayloadToGCS(parsed.normalized ?? raw, {
+      etiqueta: parsed.error ? 'parse-error' : 'ok',
+      contexto: {
+        error: parsed.error?.message,
+        posicion: parsed.recorte?.posicion,
+        rescatadas: parsed.rescatadas,
+        descartadas: parsed.descartadas,
+        totalCaracteres: typeof raw === 'string' ? raw.length : null,
+        queryString: q.toString().slice(0, 900),
+        url: BUBBLE_SEARCH_URL
+      }
+    });
+    if (parsed.error && gsUri) {
+      console.error(`Payload que falló disponible en: ${gsUri} (busca la posición ${parsed.recorte?.posicion ?? '?'})`);
+    }
+  }
 
   return properties;
 }
