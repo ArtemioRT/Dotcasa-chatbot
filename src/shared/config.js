@@ -1,10 +1,15 @@
 // ============================================================================
-// CONFIG — dotcasa-chatbot (sin GCS)
+// CONFIG — dotcasa-chatbot
 // ============================================================================
 import 'dotenv/config';
 
 export const PORT = process.env.PORT || 3000;
 export const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Marca de build: se imprime al arrancar para saber de un vistazo qué versión
+// está corriendo realmente en Cloud Run. Súbela cuando cambies algo relevante.
+export const APP_VERSION = '1.1.0';
+export const BUILD_TAG   = 'rescate-parseo+volcado-gcs';
 
 export const BUBBLE_SEARCH_URL     = process.env.BUBBLE_SEARCH_URL;
 export const OPENAI_API_KEY        = process.env.OPENAI_API_KEY;
