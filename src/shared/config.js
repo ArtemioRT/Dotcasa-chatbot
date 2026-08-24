@@ -24,6 +24,13 @@ export const DEBUG_DUMP_PREFIX = process.env.DEBUG_DUMP_PREFIX || 'debug-bubble-
 // guardar todas las respuestas, o 'off' para desactivarlo por completo.
 export const DEBUG_DUMP_MODE   = process.env.DEBUG_DUMP_MODE   || 'on-error';
 
+// Formato con el que viajan Ciudad/Estado/Colonia a Bubble. Depende de cómo
+// esté armado el constraint del workflow:
+//   'json'  -> ["Monterrey"]   (si el workflow parsea JSON, como tipoInmueble)
+//   'plain' -> Monterrey       (si el constraint es Ciudad = <param>)
+//   'csv'   -> Monterrey,San Pedro
+export const BUBBLE_ADMIN_FORMAT = process.env.BUBBLE_ADMIN_FORMAT || 'json';
+
 export const MIN_RESULTS_THRESHOLD  = 3;
 export const MIN_VISIBLE_TARGET     = 15;
 export const INITIAL_DISPLAY_COUNT  = 3;

@@ -2,7 +2,7 @@
 // BUBBLE — búsqueda de propiedades, parseo de respuesta y filtros
 // ============================================================================
 import axios from 'axios';
-import { BUBBLE_SEARCH_URL } from '../../shared/config.js';
+import { BUBBLE_SEARCH_URL, BUBBLE_ADMIN_FORMAT } from '../../shared/config.js';
 import { httpsAgent } from '../../shared/httpAgents.js';
 import { normalizeComparableText, parseBubbleNumber } from '../../shared/utils.js';
 import { dumpPayloadToGCS, dumpEnabled } from '../../shared/gcsDebug.js';
@@ -126,19 +126,35 @@ export async function searchBubble(params) {
   if (params.Precio_max     != null) q.append('Precio_max',     params.Precio_max);
   if (params.M2_cons_min    != null) q.append('M2_cons_min',    params.M2_cons_min);
   if (params.M2_terreno_min != null) q.append('M2_terreno_min', params.M2_terreno_min);
-  // Ubicación administrativa: se filtra por nombre en Bubble (Ciudad/Estado/Colonia).
-  // Son multi-valor ("Monterrey o San Pedro"), así que viajan como JSON igual
-  // que tipoInmueble/tipoOperación.
-  if (params.Ciudad?.length)         q.append('Ciudad',         JSON.stringify(params.Ciudad));
-  if (params.Estado?.length)          q.append('Estado',        JSON.stringify(params.Estado));
-  if (params.Colonia?.length)         q.append('Colonia',       JSON.stringify(params.Colonia));
+  // Ubicación administrativa. El formato depende de cómo esté hecho el
+  // constraint en Bubble; ver BUBBLE_ADMIN_FORMAT en config.
+  const formatAdmin = (valores) => {
+    if (BUBBLE_ADMIN_FORMAT === 'plain') return String(valores[0]);
+    if (BUBBLE_ADMIN_FORMAT === 'csv')   return valores.join(',');
+    return JSON.stringify(valores);
+  };
+  if (params.Ciudad?.length)         q.append('Ciudad',         formatAdmin(params.Ciudad));
+  if (params.Estado?.length)         q.append('Estado',         formatAdmin(params.Estado));
+  if (params.Colonia?.length)        q.append('Colonia',        formatAdmin(params.Colonia));
   // Ubicación geográfica: solo se manda cuando la búsqueda es por distancia.
   if (params.LocacionBubble)         q.append('Locacion',       params.LocacionBubble);
   else if (params.Locacion)          q.append('Locacion',       params.Locacion);
   if (params.km            != null)  q.append('km',             params.km);
   if (params.exactMatch)             q.append('exactMatch',     params.exactMatch);
 
-  const url = `${BUBBLE_SEARCH_URL}?${q.toString()}`;
+  // URLSearchParams codifica los espacios como '+' (formato de formulario) y
+  // Bubble los toma literales: "Nuevo+León" no coincide con ningún estado.
+  // Se convierten a %20, que es lo que espera un query string. Un '+' literal
+  // ya viene como %2B, así que este reemplazo solo afecta espacios.
+  // Los corchetes se dejan literales ([ ]) en vez de %5B/%5D, para que la URL
+  // sea idéntica a la que ya se verificó que Bubble acepta.
+  const queryString = q.toString()
+    .replace(/\+/g, '%20')
+    .replace(/%5B/g, '[')
+    .replace(/%5D/g, ']');
+  const url = `${BUBBLE_SEARCH_URL}?${queryString}`;
+  // Solo el query string: la URL base puede llevar token y no debe ir a logs.
+  console.log(`  -> Bubble query: ${queryString}`);
   const res = await axios.get(url, { httpsAgent, timeout: 15000 });
   const data = res.data;
   const raw = data.response?.Propiedades || data.Propiedades;
