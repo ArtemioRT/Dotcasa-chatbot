@@ -254,7 +254,7 @@ router.post('/chat', async (req, res) => {
             alternativas: [
               params.Habitaciones ? `Flexibilizar recamaras` : '',
               params.Precio_max ? `Expandir presupuesto` : '',
-              params.tipoOperación?.includes('venta') ? `Incluir opciones de renta` : '',
+              params.tipoOperación?.some(op => /venta/i.test(op)) ? `Incluir opciones de renta` : '',
               intent.colonia.length ? `Ampliar de la colonia a toda la ciudad` : '',
               intent.ciudad.length ? `Buscar en municipios cercanos` : '',
               `Cambiar tipo de inmueble`

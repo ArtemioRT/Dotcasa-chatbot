@@ -1,8 +1,16 @@
 // ============================================================================
 // SCORING ENGINE v2.0 — puntuación, clasificación y formateo de propiedades
 // ============================================================================
-import { parseBubbleNumber, normalizePublicUrl } from '../../shared/utils.js';
+import { parseBubbleNumber, normalizePublicUrl, normalizeSearchText } from '../../shared/utils.js';
 import { parsePropertyCoords } from './geocoding.js';
+
+// Compara ignorando mayúsculas y acentos: Bubble guarda "Venta" y el modelo
+// puede mandar "venta", "Cabaña" vs "cabana", etc.
+function listaIncluye(lista, valor) {
+  if (!lista?.length) return false;
+  const objetivo = normalizeSearchText(valor);
+  return lista.some(item => normalizeSearchText(item) === objetivo);
+}
 
 export function scoreProperty(prop, params, refCoords) {
   let score = 0;
@@ -24,12 +32,12 @@ export function scoreProperty(prop, params, refCoords) {
   const userRadioKm = params.km || 10;
 
   let operacionMatch = false;
-  if (userTipoOperacion.length === 0 || userTipoOperacion.includes(propOperacion)) {
+  if (userTipoOperacion.length === 0 || listaIncluye(userTipoOperacion, propOperacion)) {
     score += 20; details.operacionScore = 20; operacionMatch = true;
   } else { score -= 15; details.operacionScore = -15; }
 
   let tipoInmuebleMatch = false;
-  if (userTipoInmueble.length === 0 || userTipoInmueble.includes(propTipo)) {
+  if (userTipoInmueble.length === 0 || listaIncluye(userTipoInmueble, propTipo)) {
     score += 20; details.tipoInmuebleScore = 20; tipoInmuebleMatch = true;
   } else { score -= 10; details.tipoInmuebleScore = -10; }
 
@@ -114,8 +122,8 @@ export function classifyAndScoreProperties(properties, params, refCoords) {
     const userPresupuesto = params.Precio_max;
 
     let classification = 'descartada';
-    const operacionExacta = userTipoOperacion.length === 0 || userTipoOperacion.includes(propOperacion);
-    const tipoExacto = userTipoInmueble.length === 0 || userTipoInmueble.includes(propTipo);
+    const operacionExacta = userTipoOperacion.length === 0 || listaIncluye(userTipoOperacion, propOperacion);
+    const tipoExacto = userTipoInmueble.length === 0 || listaIncluye(userTipoInmueble, propTipo);
     const habitacionesExactas = userHabitaciones == null || propHabitaciones === userHabitaciones;
     const banosSuficientes = userBanos == null || propBanos >= userBanos;
     const pisosSuficientes = userPisos == null || propPisos >= userPisos;

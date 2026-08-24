@@ -125,8 +125,8 @@ export const CHAT_TOOLS = [{
         },
         tipoOperación: {
           type: 'array',
-          items: { type: 'string', enum: ['venta', 'renta'] },
-          description: 'Si el usuario quiere comprar ("venta") o rentar ("renta"), en minúsculas. Omite si no lo especifica.'
+          items: { type: 'string', enum: ['Venta', 'Renta'] },
+          description: 'Si el usuario quiere comprar ("Venta") o rentar ("Renta"). Con mayúscula inicial: así está guardado en la base y una minúscula no coincide. Omite si no lo especifica.'
         },
         Habitaciones: { type: 'number', description: 'Número mínimo de recámaras/habitaciones deseadas.' },
         Banos:        { type: 'number', description: 'Número mínimo de baños deseados.' },
@@ -197,7 +197,31 @@ export function inferTipoInmuebleFromMessage(message) {
   return tipos;
 }
 
+// Valores canónicos tal como están escritos en la base de Bubble. La
+// comparación allá distingue mayúsculas, así que "venta" no encuentra "Venta".
+const CANONICAL_OPERACION = ['Venta', 'Renta'];
+const CANONICAL_INMUEBLE = [
+  'Casa', 'Departamento', 'Rancho', 'Cabaña', 'Quinta', 'Oficina',
+  'Local Comercial', 'Terreno', 'Bodega Comercial', 'Nave Industrial', 'Bodega Industrial'
+];
+
+// Lleva cada valor a su forma canónica sin importar cómo lo haya escrito el
+// modelo (minúsculas, sin acentos). Lo que no reconoce lo deja tal cual.
+function canonicalizar(valores, catalogo) {
+  if (!Array.isArray(valores)) return valores;
+  return valores.map(v => {
+    const objetivo = normalizeSearchText(v);
+    return catalogo.find(c => normalizeSearchText(c) === objetivo) || v;
+  });
+}
+
 export function sanitizeParams(params) {
+  if (params.tipoOperación?.length) {
+    params.tipoOperación = canonicalizar(params.tipoOperación, CANONICAL_OPERACION);
+  }
+  if (params.tipoInmueble?.length) {
+    params.tipoInmueble = canonicalizar(params.tipoInmueble, CANONICAL_INMUEBLE);
+  }
   if (params.km != null) {
     if (params.km > 100) params.km = 100;
     if (params.km < 1)   params.km = 2;
