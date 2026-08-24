@@ -6,7 +6,11 @@
 import { logger } from './src/shared/logger.js';
 import express from 'express';
 import cors from 'cors';
-import { PORT } from './src/shared/config.js';
+import {
+  PORT, APP_VERSION, BUILD_TAG,
+  GCS_BUCKET_NAME, DEBUG_DUMP_PREFIX, DEBUG_DUMP_MODE,
+  BUBBLE_SEARCH_URL, OPENAI_API_KEY, MAPBOX_ACCESS_TOKEN
+} from './src/shared/config.js';
 import chatbotRoutes from './src/modules/chatbot/chat.routes.js';
 
 const app = express();
@@ -65,4 +69,13 @@ process.on('uncaughtException', (err) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   logger.info(`dotcasa-chatbot inicializado en puerto ${PORT}`);
+  // Banner de diagnóstico: confirma qué build corre y qué está configurado,
+  // para no confundir una imagen vieja con un problema de código.
+  logger.info(`BUILD v${APP_VERSION} [${BUILD_TAG}]`);
+  logger.info(
+    `Config | Bubble:${BUBBLE_SEARCH_URL ? 'ok' : 'FALTA'}` +
+    ` OpenAI:${OPENAI_API_KEY ? 'ok' : 'FALTA'}` +
+    ` Mapbox:${MAPBOX_ACCESS_TOKEN ? 'ok' : 'FALTA'}` +
+    ` | volcado:${DEBUG_DUMP_MODE} -> gs://${GCS_BUCKET_NAME}/${DEBUG_DUMP_PREFIX}/`
+  );
 });
