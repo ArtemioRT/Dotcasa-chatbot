@@ -72,20 +72,19 @@ router.post('/chat', async (req, res) => {
     // -----------------------------------------------------------------------
     // Si el LLM solo llenó "Locacion" con algo tipo "Cumbres, Monterrey",
     // lo descomponemos en colonia/ciudad/estado con Mapbox antes de resolver.
-    if (params.Locacion && !params.Ciudad && !params.Colonia && !params.Estado) {
+    if (params.Locacion && !params.Ciudad?.length && !params.Colonia?.length && !params.Estado?.length) {
       const parsed = await parseLocacionSmart(params.Locacion);
-      if (parsed.colonia.length) params.Colonia = parsed.colonia[0];
-      if (parsed.ciudad.length)  params.Ciudad  = parsed.ciudad[0];
-      if (parsed.estado.length)  params.Estado  = parsed.estado[0];
+      if (parsed.colonia.length) params.Colonia = parsed.colonia;
+      if (parsed.ciudad.length)  params.Ciudad  = parsed.ciudad;
+      if (parsed.estado.length)  params.Estado  = parsed.estado;
       // Si resultó ser puramente administrativo, Locacion deja de ser un punto.
-      if ((params.Ciudad || params.Colonia || params.Estado) && params.km == null) {
-        params.Locacion = null;
-      }
+      const resolvioAdmin = params.Ciudad?.length || params.Colonia?.length || params.Estado?.length;
+      if (resolvioAdmin && params.km == null) params.Locacion = null;
     }
 
     const intent = resolveLocationIntent(params, userLocation);
     const plan = buildSearchPlan(intent);
-    console.log(`Ubicación resuelta | modo=${intent.mode} ciudad=${intent.ciudad || '-'} colonia=${intent.colonia || '-'} estado=${intent.estado || '-'} km=${intent.km ?? '-'}`);
+    console.log(`Ubicación resuelta | modo=${intent.mode} ciudad=[${intent.ciudad.join('|') || '-'}] colonia=[${intent.colonia.join('|') || '-'}] estado=[${intent.estado.join('|') || '-'}] km=${intent.km ?? '-'}`);
     console.log(`Plan de búsqueda: ${plan.map(s => s.etiqueta).join(' -> ')}`);
 
     const userSpecifiedRadius = intent.kmExplicito;
@@ -209,7 +208,7 @@ router.post('/chat', async (req, res) => {
     const pidioUbicacion = intent.mode !== SEARCH_MODE.NONE;
     // Descripción legible de la ubicación efectivamente buscada.
     const ubicacionBuscada = pidioUbicacion
-      ? ([intent.colonia, intent.ciudad, intent.estado].filter(Boolean).join(', ') || intent.referencia)
+      ? ([...intent.colonia, ...intent.ciudad, ...intent.estado].join(', ') || intent.referencia)
       : null;
 
     const isCriteriaExactMatch = isExactMatch;
@@ -256,8 +255,8 @@ router.post('/chat', async (req, res) => {
               params.Habitaciones ? `Flexibilizar recamaras` : '',
               params.Precio_max ? `Expandir presupuesto` : '',
               params.tipoOperación?.includes('venta') ? `Incluir opciones de renta` : '',
-              intent.colonia ? `Ampliar de la colonia a toda la ciudad` : '',
-              intent.ciudad ? `Buscar en municipios cercanos` : '',
+              intent.colonia.length ? `Ampliar de la colonia a toda la ciudad` : '',
+              intent.ciudad.length ? `Buscar en municipios cercanos` : '',
               `Cambiar tipo de inmueble`
             ].filter(Boolean)
           } : null

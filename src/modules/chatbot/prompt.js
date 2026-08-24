@@ -136,16 +136,19 @@ export const CHAT_TOOLS = [{
         M2_cons_min:  { type: 'number', description: 'Metros cuadrados de construcción mínimos deseados.' },
         M2_terreno_min: { type: 'number', description: 'Metros cuadrados de terreno mínimos deseados.' },
         Ciudad: {
-          type: 'string',
-          description: 'Ciudad o municipio mencionado, cuando el usuario habla de la ciudad como zona (ej. "en Monterrey", "en Guadalupe"). Escríbela completa y bien acentuada. NO la uses para colonias ni para landmarks.'
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ciudad(es) o municipio(s) mencionados, cuando el usuario habla de la ciudad como zona (ej. "en Monterrey", "en Guadalupe"). Escríbelas completas y bien acentuadas. Si menciona varias ("en Monterrey o San Pedro") inclúyelas todas. NO la uses para colonias ni landmarks.'
         },
         Estado: {
-          type: 'string',
-          description: 'Estado de la República mencionado o claramente implícito por la ciudad (ej. Monterrey -> "Nuevo León", Guadalajara -> "Jalisco"). Rellénalo cuando lo sepas con certeza, ayuda a desambiguar ciudades homónimas.'
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Estado(s) de la República mencionados o claramente implícitos por la ciudad (ej. Monterrey -> "Nuevo León", Guadalajara -> "Jalisco"). Rellénalo cuando lo sepas con certeza, ayuda a desambiguar ciudades homónimas.'
         },
         Colonia: {
-          type: 'string',
-          description: 'Colonia, fraccionamiento o zona dentro de una ciudad (ej. "Cumbres", "San Jerónimo", "Del Valle"). Usa el nombre base sin el sector ni número: si el usuario dice "Cumbres 3er Sector" pon "Cumbres" para no perder variantes. Si el usuario menciona colonia Y ciudad, llena ambos campos.'
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Colonia(s), fraccionamiento(s) o zona(s) dentro de una ciudad (ej. "Cumbres", "San Jerónimo", "Del Valle"). Usa el nombre base sin el sector ni número: si el usuario dice "Cumbres 3er Sector" pon "Cumbres" para no perder variantes. Si menciona varias, inclúyelas todas. Si menciona colonia Y ciudad, llena ambos campos.'
         },
         km: {
           type: 'number',

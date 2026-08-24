@@ -34,6 +34,24 @@ export function normalizePlace(text) {
   return ESTADO_ALIASES.get(base) || base;
 }
 
+// Ciudad/Estado/Colonia son multi-valor ("Monterrey o San Pedro"). Acepta
+// string, array o JSON serializado y siempre devuelve un array limpio.
+export function toPlaceList(value) {
+  if (value == null) return [];
+  let list = value;
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return [];
+    if (raw.startsWith('[')) {
+      try { list = JSON.parse(raw); } catch { list = [raw]; }
+    } else {
+      list = [raw];
+    }
+  }
+  if (!Array.isArray(list)) list = [list];
+  return list.map(v => String(v).trim()).filter(Boolean);
+}
+
 // ---------------------------------------------------------------------------
 // Coincidencia de colonia tolerante a variantes
 // ---------------------------------------------------------------------------
@@ -64,21 +82,30 @@ export function getPropColonia(prop) { return fieldOf(prop, 'Colonia', 'colonia'
 // Filtro administrativo (texto sobre Ciudad / Estado / Colonia)
 // ---------------------------------------------------------------------------
 // Devuelve { properties, matchType }. matchType: 'exact' | 'relaxed' | 'none'.
-export function filterByAdminLocation(properties, { ciudad, estado, colonia } = {}) {
+// Semántica: OR dentro de cada campo (Monterrey O San Pedro), AND entre
+// campos distintos (ciudad Monterrey Y colonia Cumbres).
+export function filterByAdminLocation(properties, filtro = {}) {
+  const ciudad  = toPlaceList(filtro.ciudad);
+  const estado  = toPlaceList(filtro.estado);
+  const colonia = toPlaceList(filtro.colonia);
+
   if (!properties.length) return { properties, matchType: 'none' };
-  if (!ciudad && !estado && !colonia) return { properties, matchType: 'not_requested' };
+  if (!ciudad.length && !estado.length && !colonia.length) {
+    return { properties, matchType: 'not_requested' };
+  }
 
   const matchAdmin = (prop, { strictColonia }) => {
-    if (estado) {
+    if (estado.length) {
       const propEstado = normalizePlace(getPropEstado(prop));
-      if (propEstado && propEstado !== normalizePlace(estado)) return false;
+      if (propEstado && !estado.some(e => normalizePlace(e) === propEstado)) return false;
     }
-    if (ciudad) {
+    if (ciudad.length) {
       const propCiudad = normalizePlace(getPropCiudad(prop));
-      if (propCiudad && propCiudad !== normalizePlace(ciudad)) return false;
+      if (propCiudad && !ciudad.some(c => normalizePlace(c) === propCiudad)) return false;
     }
-    if (colonia) {
-      if (!coloniaMatches(getPropColonia(prop), colonia, { strict: strictColonia })) return false;
+    if (colonia.length) {
+      const propColonia = getPropColonia(prop);
+      if (!colonia.some(c => coloniaMatches(propColonia, c, { strict: strictColonia }))) return false;
     }
     return true;
   };
@@ -88,7 +115,7 @@ export function filterByAdminLocation(properties, { ciudad, estado, colonia } = 
 
   // Segundo intento solo si hay colonia: aflojamos a inclusión por token
   // ("Cumbres" -> "Residencial Cumbres", "Villas de Cumbres").
-  if (colonia) {
+  if (colonia.length) {
     const relaxed = properties.filter(p => matchAdmin(p, { strictColonia: false }));
     if (relaxed.length) return { properties: relaxed, matchType: 'relaxed' };
   }
@@ -102,31 +129,32 @@ export function filterByAdminLocation(properties, { ciudad, estado, colonia } = 
 // Convierte lo que extrajo el LLM en una intención estructurada y decide el
 // modo de búsqueda. No genera filtros de Bubble directamente.
 export function resolveLocationIntent(params = {}, userLocation = {}) {
-  const ciudad  = params.Ciudad  ? String(params.Ciudad).trim()  : null;
-  const estado  = params.Estado  ? String(params.Estado).trim()  : null;
-  const colonia = params.Colonia ? String(params.Colonia).trim() : null;
+  const ciudad  = toPlaceList(params.Ciudad);
+  const estado  = toPlaceList(params.Estado);
+  const colonia = toPlaceList(params.Colonia);
   const km      = params.km != null ? Number(params.km) : null;
   const usarGPS = Boolean(params.usarUbicacionUsuario);
   const referenciaRaw = params.Locacion ? String(params.Locacion).trim() : null;
 
-  const tieneAdmin = Boolean(ciudad || estado || colonia);
+  const tieneAdmin = Boolean(ciudad.length || estado.length || colonia.length);
   const pidioDistancia = km != null || usarGPS;
 
-  // Punto de referencia para modo geográfico, en orden de especificidad.
+  // Punto de referencia para modo geográfico. Con varios valores se usa el
+  // primero: un radio necesita UN centro, no varios.
   let referencia = referenciaRaw;
   if (!referencia && !usarGPS) {
-    referencia = [colonia, ciudad, estado].filter(Boolean).join(', ') || null;
+    referencia = [colonia[0], ciudad[0], estado[0]].filter(Boolean).join(', ') || null;
   }
 
   let mode;
   if (pidioDistancia) {
     // "a 5 km de X" / "cerca de aquí" -> geográfico
     mode = SEARCH_MODE.RADIO;
-  } else if (colonia) {
+  } else if (colonia.length) {
     mode = SEARCH_MODE.COLONIA;
-  } else if (ciudad) {
+  } else if (ciudad.length) {
     mode = SEARCH_MODE.CIUDAD;
-  } else if (estado) {
+  } else if (estado.length) {
     mode = SEARCH_MODE.ESTADO;
   } else if (referenciaRaw) {
     // Landmark suelto ("cerca del Tec"): sin campo administrativo que filtrar,
@@ -163,14 +191,14 @@ export function buildSearchPlan(intent) {
   if (mode === SEARCH_MODE.CIUDAD) {
     // 1) Ciudad exacta -> 2) ampliar al estado -> 3) geográfico desde el centro
     steps.push({ tipo: 'admin', ciudad, estado, etiqueta: 'ciudad exacta' });
-    if (estado) steps.push({ tipo: 'admin', estado, etiqueta: 'ampliado a estado' });
+    if (estado.length) steps.push({ tipo: 'admin', estado, etiqueta: 'ampliado a estado' });
     steps.push({ tipo: 'geo', km: 25, etiqueta: 'geográfico 25km desde centro de ciudad' });
 
   } else if (mode === SEARCH_MODE.COLONIA) {
     // 1) Colonia (+variantes) -> 2) geográfico cercano -> 3) ampliar a ciudad
     steps.push({ tipo: 'admin', colonia, ciudad, estado, etiqueta: 'colonia exacta' });
     steps.push({ tipo: 'geo', km: DEFAULT_NEARBY_KM, etiqueta: 'geográfico 5km desde colonia' });
-    if (ciudad) steps.push({ tipo: 'admin', ciudad, estado, etiqueta: 'ampliado a ciudad' });
+    if (ciudad.length) steps.push({ tipo: 'admin', ciudad, estado, etiqueta: 'ampliado a ciudad' });
 
   } else if (mode === SEARCH_MODE.ESTADO) {
     steps.push({ tipo: 'admin', estado, etiqueta: 'estado' });
@@ -179,7 +207,7 @@ export function buildSearchPlan(intent) {
     // 1) radio pedido -> 2) radio duplicado -> 3) caer a administrativo
     steps.push({ tipo: 'geo', km, etiqueta: `geográfico ${km}km` });
     steps.push({ tipo: 'geo', km: km * 2, etiqueta: `geográfico ampliado ${km * 2}km` });
-    if (colonia || ciudad || estado) {
+    if (colonia.length || ciudad.length || estado.length) {
       steps.push({ tipo: 'admin', colonia, ciudad, estado, etiqueta: 'fallback administrativo' });
     }
 

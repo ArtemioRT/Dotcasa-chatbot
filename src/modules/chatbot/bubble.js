@@ -43,9 +43,11 @@ export async function searchBubble(params) {
   if (params.M2_cons_min    != null) q.append('M2_cons_min',    params.M2_cons_min);
   if (params.M2_terreno_min != null) q.append('M2_terreno_min', params.M2_terreno_min);
   // Ubicación administrativa: se filtra por nombre en Bubble (Ciudad/Estado/Colonia).
-  if (params.Ciudad)                 q.append('Ciudad',         params.Ciudad);
-  if (params.Estado)                 q.append('Estado',         params.Estado);
-  if (params.Colonia)                q.append('Colonia',        params.Colonia);
+  // Son multi-valor ("Monterrey o San Pedro"), así que viajan como JSON igual
+  // que tipoInmueble/tipoOperación.
+  if (params.Ciudad?.length)         q.append('Ciudad',         JSON.stringify(params.Ciudad));
+  if (params.Estado?.length)          q.append('Estado',        JSON.stringify(params.Estado));
+  if (params.Colonia?.length)         q.append('Colonia',       JSON.stringify(params.Colonia));
   // Ubicación geográfica: solo se manda cuando la búsqueda es por distancia.
   if (params.LocacionBubble)         q.append('Locacion',       params.LocacionBubble);
   else if (params.Locacion)          q.append('Locacion',       params.Locacion);
