@@ -124,6 +124,56 @@ export function filterByAdminLocation(properties, filtro = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Herencia de ubicación entre turnos
+// ---------------------------------------------------------------------------
+// "Casa en Monterrey" -> "ahora de dos pisos" debe seguir siendo Monterrey.
+// Confiar en que el modelo lo recuerde falla seguido, así que la última
+// ubicación usada se recupera del historial y se reutiliza cuando el turno
+// nuevo no menciona ninguna.
+export function extractLastLocation(history = []) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg?.role !== 'tool' || typeof msg.content !== 'string') continue;
+    try {
+      const criterios = JSON.parse(msg.content)?.busquedaCriterios;
+      if (!criterios) continue;
+      const ciudad  = toPlaceList(criterios.ciudad);
+      const colonia = toPlaceList(criterios.colonia);
+      const estado  = toPlaceList(criterios.estado);
+      if (ciudad.length || colonia.length || estado.length) {
+        return { ciudad, colonia, estado };
+      }
+    } catch { /* mensaje de tool no parseable, se ignora */ }
+  }
+  return null;
+}
+
+// Aplica la ubicación heredada solo si el turno actual no trae ninguna señal
+// de ubicación propia (ni administrativa, ni radio, ni GPS, ni landmark).
+export function inheritLocation(params, history) {
+  const yaTiene = toPlaceList(params.Ciudad).length
+    || toPlaceList(params.Colonia).length
+    || toPlaceList(params.Estado).length
+    || params.Locacion
+    || params.usarUbicacionUsuario
+    || params.km != null;
+  if (yaTiene) return { params, heredada: null };
+
+  const previa = extractLastLocation(history);
+  if (!previa) return { params, heredada: null };
+
+  return {
+    params: {
+      ...params,
+      ...(previa.ciudad.length  ? { Ciudad: previa.ciudad }   : {}),
+      ...(previa.colonia.length ? { Colonia: previa.colonia } : {}),
+      ...(previa.estado.length  ? { Estado: previa.estado }   : {})
+    },
+    heredada: previa
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Resolver de intención de ubicación
 // ---------------------------------------------------------------------------
 // Convierte lo que extrajo el LLM en una intención estructurada y decide el

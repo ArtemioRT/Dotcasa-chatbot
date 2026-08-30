@@ -8,13 +8,14 @@ import {
   INITIAL_DISPLAY_COUNT, MAX_PROPERTIES_TO_SHOW
 } from '../../shared/config.js';
 import { parseBubbleNumber } from '../../shared/utils.js';
-import { geocodeLocation, parseLocacionSmart } from './geocoding.js';
+import { geocodeLocation, parseLocacionSmart, reverseGeocode } from './geocoding.js';
 import {
   searchBubble, filterByProximity, annotateProximity,
   validateCriteriaMatch, getPropNum
 } from './bubble.js';
 import {
-  resolveLocationIntent, buildSearchPlan, filterByAdminLocation, SEARCH_MODE
+  resolveLocationIntent, buildSearchPlan, filterByAdminLocation,
+  inheritLocation, SEARCH_MODE
 } from './locationSearch.js';
 import { classifyAndScoreProperties, formatProperties } from './scoring.js';
 import {
@@ -33,8 +34,19 @@ router.post('/chat', async (req, res) => {
 
   try {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY no configurada' });
-    const { message, history = [], location: userLocation = {} } = req.body;
+    const { message, history = [], location: rawLocation = {} } = req.body;
     if (!message) return res.status(400).json({ error: 'message es requerido' });
+
+    // El navegador solo manda lat/lon. Se traducen a colonia/ciudad/estado para
+    // que "cerca de mí" pueda resolverse como una zona y no solo como un punto.
+    let userLocation = rawLocation;
+    if (rawLocation?.lat != null && rawLocation?.lon != null && !rawLocation.ciudad) {
+      const rev = await reverseGeocode(rawLocation.lat, rawLocation.lon);
+      if (rev) {
+        userLocation = { ...rawLocation, colonia: rev.colonia, ciudad: rev.ciudad, estado: rev.estado };
+        console.log(`GPS resuelto | ${rev.colonia || '-'} / ${rev.ciudad || '-'} / ${rev.estado || '-'}`);
+      }
+    }
 
     const conversationHistory = [...history, { role: 'user', content: message }];
     const inferredMessageLocacion = extractFallbackLocacion(message);
@@ -65,6 +77,24 @@ router.post('/chat', async (req, res) => {
     const inferredTipos = inferTipoInmuebleFromMessage(message);
     if (inferredTipos.length > 0) params.tipoInmueble = inferredTipos;
     if (!params.Locacion && inferredMessageLocacion) params.Locacion = inferredMessageLocacion;
+
+    // Si este turno no menciona ubicación, se hereda la del turno anterior
+    // ("casa en Monterrey" -> "ahora de dos pisos" sigue siendo Monterrey).
+    const herencia = inheritLocation(params, history);
+    params = herencia.params;
+    if (herencia.heredada) {
+      console.log(`Ubicación heredada del turno anterior | ciudad=[${herencia.heredada.ciudad.join('|') || '-'}] colonia=[${herencia.heredada.colonia.join('|') || '-'}]`);
+    }
+
+    // Sin ubicación propia ni heredada, se cae al GPS del usuario si lo dio.
+    if (!herencia.heredada && !params.Ciudad?.length && !params.Colonia?.length
+        && !params.Estado?.length && !params.Locacion && !params.usarUbicacionUsuario) {
+      if (userLocation?.ciudad) {
+        params.Ciudad = [userLocation.ciudad];
+        if (userLocation.estado) params.Estado = [userLocation.estado];
+        console.log(`Ubicación tomada del GPS | ciudad=${userLocation.ciudad}`);
+      }
+    }
 
     // -----------------------------------------------------------------------
     // 1) RESOLVER UBICACIÓN — convierte lo extraído por el LLM en una intención

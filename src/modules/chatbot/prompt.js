@@ -47,14 +47,26 @@ export function extractFallbackLocacion(message) {
 }
 
 export function buildSystemPrompt(userLocation) {
-  const locationContext = userLocation?.ciudad
+  // Basta con tener coordenadas: el navegador entrega lat/lon sin nombre de
+  // ciudad, y antes eso hacía que se descartara todo el contexto de ubicación.
+  const tieneUbicacion = Boolean(
+    userLocation?.ciudad || userLocation?.colonia ||
+    (userLocation?.lat != null && userLocation?.lon != null)
+  );
+
+  const locationContext = tieneUbicacion
     ? (() => {
         const parts = [];
         if (userLocation.colonia) parts.push(`Colonia: ${userLocation.colonia}`);
         if (userLocation.ciudad)  parts.push(`Ciudad: ${userLocation.ciudad}`);
         if (userLocation.estado)  parts.push(`Estado: ${userLocation.estado}`);
-        if (userLocation.lat && userLocation.lon) parts.push(`Coordenadas: ${userLocation.lat}, ${userLocation.lon}`);
-        return `\n\n## UBICACIÓN ACTUAL DEL USUARIO (GPS)\n${parts.join('\n')}\nSi no especifica ubicación en su búsqueda, usa estas coordenadas como punto de referencia.`;
+        if (userLocation.lat != null && userLocation.lon != null) {
+          parts.push(`Coordenadas: ${userLocation.lat}, ${userLocation.lon}`);
+        }
+        const comoUsarla = userLocation.ciudad
+          ? `Cuando el usuario diga "cerca de mí", "por aquí" o "en mi zona", llena Ciudad con "${userLocation.ciudad}"${userLocation.colonia ? ` y Colonia con "${userLocation.colonia}"` : ''}. Si además pide una distancia ("a 5 km"), usa usarUbicacionUsuario: true junto con km.`
+          : `Cuando el usuario diga "cerca de mí" o "por aquí", usa usarUbicacionUsuario: true con un km razonable.`;
+        return `\n\n## UBICACIÓN ACTUAL DEL USUARIO (GPS)\n${parts.join('\n')}\n${comoUsarla}\nSi el usuario NO menciona ninguna zona, asume que busca en esta ubicación.`;
       })()
     : '';
 
@@ -69,6 +81,12 @@ Si el usuario pide comparar, opinar o recomendar entre las propiedades mostradas
 
 ## MEMORIA CONVERSACIONAL
 Usa el historial de la conversación como contexto persistente: si el usuario ya dio presupuesto, ubicación o tipo de inmueble antes y ahora solo agrega o cambia un criterio, conserva los anteriores en la nueva búsqueda salvo que el usuario los contradiga explícitamente.
+Ejemplo: "casas en Monterrey" y luego "de dos pisos" -> la segunda búsqueda sigue siendo en Monterrey, ahora con Pisos: 2. NUNCA descartes la ubicación anterior solo porque el mensaje nuevo no la repite.
+
+## MENSAJES CORTOS Y CONFIRMACIONES
+Un "ok", "sí", "va", "está bien" o "dale" es una CONFIRMACIÓN de lo último que propusiste, no el inicio de una conversación nueva.
+NUNCA respondas "¿en qué te puedo ayudar?" a un mensaje así: ya estabas ayudando. Retoma el hilo y ejecuta lo que acababas de ofrecer (si ofreciste buscar en otra zona, búscala; si ofreciste más opciones, muéstralas).
+Si de verdad no queda claro qué confirma, pregunta algo concreto sobre lo último que se habló, nunca algo genérico.
 
 ## IMPORTANTE: SÓLO MENCIONA CARACTERÍSTICAS QUE APAREZCAN EN propiedadesMostradas
 NO inventes ni asumas características. Usa EXACTAMENTE los valores reales.

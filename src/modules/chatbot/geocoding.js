@@ -114,6 +114,39 @@ export async function geocodeLocation(locacion) {
   }
 }
 
+// Traduce coordenadas del GPS a colonia/ciudad/estado. El navegador solo
+// entrega lat/lon, así que sin esto no hay forma de filtrar por zona cuando
+// el usuario dice "cerca de mí".
+export async function reverseGeocode(lat, lng) {
+  if (lat == null || lng == null || !MAPBOX_ACCESS_TOKEN) return null;
+  const key = `rev:${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
+  if (geoCache.has(key)) return geoCache.get(key);
+  try {
+    const res = await axios.get(`${MAPBOX_GEOCODE_URL}/${lng},${lat}.json`, {
+      params: {
+        access_token: MAPBOX_ACCESS_TOKEN,
+        language: 'es',
+        types: 'neighborhood,place,region'
+      },
+      timeout: 8000
+    });
+    const features = res.data?.features || [];
+    const buscar = (tipo) => features.find(f => (f.place_type || []).includes(tipo))?.text || null;
+    const resultado = {
+      colonia: buscar('neighborhood'),
+      ciudad:  buscar('place'),
+      estado:  buscar('region'),
+      displayName: features[0]?.place_name || null,
+      lat: Number(lat), lng: Number(lng)
+    };
+    geoCache.set(key, resultado);
+    return resultado;
+  } catch (err) {
+    console.error('Reverse geocoding error:', err.response?.data?.message || err.message);
+    return null;
+  }
+}
+
 function classifyMapboxFeature(feature) {
   const types = feature?.place_type || [];
   if (types.includes('region')) return 'estado';
