@@ -7,7 +7,7 @@ import {
   OPENAI_API_KEY, MIN_VISIBLE_TARGET,
   INITIAL_DISPLAY_COUNT, MAX_PROPERTIES_TO_SHOW
 } from '../../shared/config.js';
-import { parseBubbleNumber } from '../../shared/utils.js';
+import { parseBubbleNumber, normalizeSearchText } from '../../shared/utils.js';
 import {
   newRequestId, chatLogEnabled, logChatRequest, logChatResponse
 } from '../../shared/gcsDebug.js';
@@ -199,11 +199,16 @@ router.post('/chat', async (req, res) => {
       }
 
       const registrarQuery = (qs) => consultasBubble.push({ etiqueta: step.etiqueta, query: qs });
-      let results = await searchBubble(searchParams, { onQuery: registrarQuery });
-      let exactMatchUsed = true;
-      if (searchParams.exactMatch === 'yes' && results.length === 0) {
-        results = await searchBubble({ ...searchParams, exactMatch: 'no' }, { onQuery: registrarQuery });
-        exactMatchUsed = false;
+
+      // exactMatch=no es el modo por defecto. Si Bubble no devuelve nada, se
+      // reintenta la MISMA consulta con exactMatch=yes, que flexibiliza el
+      // criterio del lado de Bubble.
+      let results = await searchBubble({ ...searchParams, exactMatch: 'no' }, { onQuery: registrarQuery });
+      let usoReintentoExactMatch = false;
+      if (results.length === 0) {
+        results = await searchBubble({ ...searchParams, exactMatch: 'yes' }, { onQuery: registrarQuery });
+        usoReintentoExactMatch = true;
+        console.log(`  [${step.etiqueta}] 0 resultados con exactMatch=no, reintento con exactMatch=yes -> ${results.length}`);
       }
       const countBubble = results.length;
 
@@ -229,7 +234,9 @@ router.post('/chat', async (req, res) => {
       console.log(`  [${step.etiqueta}] Bubble: ${countBubble} -> criterios: ${countCriteria} -> ubicación: ${results.length}`);
       return {
         results,
-        exactMatchUsed: exactMatchUsed && allExactMatch,
+        // Si hubo que reintentar, los resultados ya no son coincidencia estricta.
+        exactMatchUsed: allExactMatch && !usoReintentoExactMatch,
+        usoReintentoExactMatch,
         locationMatchType: matchType,
         radiusKm: step.tipo === 'geo' ? step.km : null
       };
@@ -272,11 +279,60 @@ router.post('/chat', async (req, res) => {
       tipo: prop['Tipo_de_inmueble'] || prop['tipo_de_inmueble'] || '',
       habitaciones: getPropNum(prop, ['N_Habitaciones', 'Habitaciones', 'habitaciones']),
       banos: getPropNum(prop, ['N_Banos', 'Banos', 'banos']),
+      // null = el dato no existe en la ficha. NO afirmes nada sobre él.
+      pisos: getPropNum(prop, ['Pisos', 'N_pisos', 'pisos']),
       precio: getPropNum(prop, ['Precio', 'precio']),
+      colonia: prop['Colonia'] || prop['colonia'] || null,
       proximidad_km: parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']),
       clasificacion: prop.__classification__,
       score: prop.__score__
     }));
+
+    // Agregados de TODO el conjunto, no solo del top 3, para que el modelo
+    // pueda resumir ("van de X a Y") en vez de enumerar tres fichas.
+    const precios = allClassified
+      .map(p => getPropNum(p, ['Precio', 'precio']))
+      .filter(v => v != null && v > 0)
+      .sort((a, b) => a - b);
+    // Se agrupa por nombre normalizado para no partir la misma colonia en dos
+    // ("Benito Juárez" y "Benito Juarez"), conservando la grafía más común.
+    const colonias = new Map();
+    for (const p of allClassified) {
+      const c = p['Colonia'] || p['colonia'];
+      if (!c) continue;
+      const clave = normalizeSearchText(c);
+      const previo = colonias.get(clave);
+      colonias.set(clave, { nombre: previo?.nombre || c, n: (previo?.n || 0) + 1 });
+    }
+    // Cuántas cumplen de verdad el criterio de pisos: las que traen el dato
+    // vacío pasaron el filtro por omisión, no por cumplirlo.
+    const conPisosConfirmados = params.Pisos != null
+      ? allClassified.filter(p => getPropNum(p, ['Pisos', 'N_pisos', 'pisos']) === params.Pisos).length
+      : null;
+    const sinDatoPisos = params.Pisos != null
+      ? allClassified.filter(p => getPropNum(p, ['Pisos', 'N_pisos', 'pisos']) == null).length
+      : null;
+
+    const resumenResultados = {
+      precioMin: precios[0] ?? null,
+      precioMax: precios[precios.length - 1] ?? null,
+      precioMediana: precios.length ? precios[Math.floor(precios.length / 2)] : null,
+      coloniasPrincipales: [...colonias.values()]
+        .sort((a, b) => b.n - a.n).slice(0, 4)
+        .map(({ nombre, n }) => `${nombre} (${n})`),
+      pisosSolicitados: params.Pisos ?? null,
+      conPisosConfirmados,
+      sinDatoDePisos: sinDatoPisos
+    };
+
+    // Qué representan los valores de proximidad_km. Sin esto el modelo asume
+    // que son distancias al usuario, y afirma "a 0.85 km de ti" sobre
+    // propiedades que están a cientos de kilómetros.
+    const proximidadReferencia = refCoords
+      ? (geocodedDisplay === 'Ubicación del usuario (GPS)'
+          ? 'DISTANCIA REAL AL USUARIO: puedes decir "de ti" o "de tu ubicación".'
+          : `Distancia al centro de "${geocodedDisplay}", NO al usuario. NUNCA digas "de ti" ni "de tu ubicación" con estos valores; si acaso, di "del centro de la zona".`)
+      : 'No se calcularon distancias. NO menciones cercanía ni kilómetros.';
 
     const pidioUbicacion = intent.mode !== SEARCH_MODE.NONE;
     // Descripción legible de la ubicación efectivamente buscada.
@@ -318,6 +374,8 @@ router.post('/chat', async (req, res) => {
             totalMostradas: totalCount
           },
           propiedadesMostradas: propertiesSummary,
+          proximidadReferencia,
+          resumenResultados,
           busquedaCriterios: {
             habitaciones: params.Habitaciones || null, banos: params.Banos || null,
             precio_min: params.Precio_min || null, precio_max: params.Precio_max || null,

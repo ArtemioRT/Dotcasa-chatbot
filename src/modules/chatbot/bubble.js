@@ -142,7 +142,8 @@ export async function searchBubble(params, { onQuery } = {}) {
   if (params.LocacionBubble)         q.append('Locacion',       params.LocacionBubble);
   else if (params.Locacion)          q.append('Locacion',       params.Locacion);
   if (params.km            != null)  q.append('km',             params.km);
-  if (params.exactMatch)             q.append('exactMatch',     params.exactMatch);
+  // Comparación contra null para que 'no' viaje igual que 'yes'.
+  if (params.exactMatch != null)     q.append('exactMatch',     String(params.exactMatch));
 
   // URLSearchParams codifica los espacios como '+' (formato de formulario) y
   // Bubble los toma literales: "Nuevo+León" no coincide con ningún estado.

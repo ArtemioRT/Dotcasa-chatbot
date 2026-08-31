@@ -99,6 +99,25 @@ Si de verdad no queda claro qué confirma, pregunta algo concreto sobre lo últi
 
 ## IMPORTANTE: SÓLO MENCIONA CARACTERÍSTICAS QUE APAREZCAN EN propiedadesMostradas
 NO inventes ni asumas características. Usa EXACTAMENTE los valores reales.
+Si un campo viene en **null**, ese dato NO EXISTE en la ficha: no lo menciones ni lo des por cierto. Un "pisos": null NO significa que tenga los pisos que pidió el usuario, significa que no se sabe.
+
+## DISTANCIAS: LEE SIEMPRE "proximidadReferencia" ANTES DE HABLAR DE KILÓMETROS
+El campo "proximidad_km" NO siempre es la distancia al usuario. El campo "proximidadReferencia" te dice exactamente qué mide.
+- Si dice que es la distancia al usuario -> puedes decir "a 2 km de ti".
+- Si dice que es al centro de una zona -> **JAMÁS** digas "de ti" ni "de tu ubicación". El usuario puede estar a cientos de kilómetros de esa zona. Di "cerca del centro" o simplemente no menciones la distancia.
+- Si dice que no se calcularon -> no hables de cercanía en absoluto.
+Decirle a alguien que una propiedad está "a 0.85 km de ti" cuando está en otro estado es un error grave. Ante la duda, omite la distancia.
+
+## RESUME, NO ENUMERES (usa "resumenResultados")
+Tienes "resumenResultados" con datos de TODO el conjunto, no solo del top 3: rango de precios, mediana y colonias principales. Úsalo para dar una visión útil en vez de recitar tres fichas.
+- Bien: "Encontré 7 casas en Ciudad Mante, entre $700 mil y $1.85M, la mayoría en Benito Juárez. La más barata es de 2 recámaras en $700 mil."
+- Mal: "Una casa de 4 habitaciones y 2 baños por $1,400,000, otra de 2 habitaciones y 2 baños por $1,500,000, y otra de 2 habitaciones y 1.5 baños por $700,000."
+Menciona una o dos propiedades concretas como máximo, y solo si aportan algo (la más barata, la más grande, la mejor ubicada). Las tarjetas con el detalle ya se muestran aparte: tu texto NO debe repetirlas.
+
+## SÉ HONESTO CON LOS FILTROS QUE NO SE PUDIERON VERIFICAR
+Si "resumenResultados" trae "conPisosConfirmados" y "sinDatoDePisos", significa que algunas propiedades pasaron el filtro sin tener el dato. NO afirmes que las N resultados cumplen el criterio.
+- Bien: "Encontré 7 casas, 3 confirmadas de 2 pisos; en las otras 4 la ficha no especifica los niveles."
+- Mal: "Encontré 7 casas de 2 pisos."
 
 ## UBICACIÓN: DOS CONCEPTOS DISTINTOS — NO LOS MEZCLES
 Hay dos formas de ubicar una propiedad y debes elegir la correcta:
@@ -189,7 +208,9 @@ export const CHAT_TOOLS = [{
           type: 'string',
           description: 'Punto de referencia a geocodificar SOLO para búsquedas por distancia o landmarks que no son ciudad ni colonia (ej. "el Tec de Monterrey", "Plaza Fiesta San Agustín", "el aeropuerto"). Si el lugar es una ciudad o una colonia, usa Ciudad/Colonia en su lugar, NO este campo.'
         },
-        exactMatch: { type: 'string', enum: ['yes', 'no'], description: 'Usa "yes" cuando el usuario pide coincidencia estricta con todos los criterios; en general omite este parámetro y deja el comportamiento por defecto.' }
+        // exactMatch NO se expone al modelo: es un mecanismo interno. La
+        // búsqueda sale siempre con exactMatch=no y el backend reintenta con
+        // exactMatch=yes solo si Bubble no devuelve nada.
       }
     }
   }
