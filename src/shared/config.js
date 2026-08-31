@@ -24,6 +24,13 @@ export const DEBUG_DUMP_PREFIX = process.env.DEBUG_DUMP_PREFIX || 'debug-bubble-
 // guardar todas las respuestas, o 'off' para desactivarlo por completo.
 export const DEBUG_DUMP_MODE   = process.env.DEBUG_DUMP_MODE   || 'on-error';
 
+// Bitácora de cada petición a /chat: guarda entrada y salida en GCS para poder
+// auditar qué parámetros llegan y qué se responde.
+//   'on'  -> guarda todas las peticiones (default)
+//   'off' -> desactivado
+export const CHAT_LOG_MODE   = process.env.CHAT_LOG_MODE   || 'on';
+export const CHAT_LOG_PREFIX = process.env.CHAT_LOG_PREFIX || 'chat-logs';
+
 // Formato con el que viajan Ciudad/Estado/Colonia a Bubble. Depende de cómo
 // esté armado el constraint del workflow:
 //   'json'  -> ["Monterrey"]   (si el workflow parsea JSON, como tipoInmueble)

@@ -8,6 +8,9 @@ import {
   INITIAL_DISPLAY_COUNT, MAX_PROPERTIES_TO_SHOW
 } from '../../shared/config.js';
 import { parseBubbleNumber } from '../../shared/utils.js';
+import {
+  newRequestId, chatLogEnabled, logChatRequest, logChatResponse
+} from '../../shared/gcsDebug.js';
 import { geocodeLocation, parseLocacionSmart, reverseGeocode } from './geocoding.js';
 import {
   searchBubble, filterByProximity, annotateProximity,
@@ -28,14 +31,26 @@ const router = Router();
 
 router.post('/chat', async (req, res) => {
   const t0 = Date.now();
+  const requestId = newRequestId();
+  // Consultas enviadas a Bubble en esta petición, para la bitácora.
+  const consultasBubble = [];
   console.log('\n' + '='.repeat(70));
-  console.log('CHAT — DotCasa AI');
+  console.log(`CHAT — DotCasa AI | req ${requestId}`);
   console.log('='.repeat(70));
 
   try {
     if (!OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY no configurada' });
     const { message, history = [], location: rawLocation = {} } = req.body;
     if (!message) return res.status(400).json({ error: 'message es requerido' });
+
+    // Bitácora de entrada. Sin await: tiene toda la petición para completarse
+    // y no debe sumarle latencia a la respuesta.
+    if (chatLogEnabled()) {
+      logChatRequest(requestId, {
+        entrada: { message, history, location: rawLocation },
+        historyLength: history.length
+      }).catch(err => console.error(`Bitácora entrada falló: ${err.message}`));
+    }
 
     // El navegador solo manda lat/lon. Se traducen a colonia/ciudad/estado para
     // que "cerca de mí" pueda resolverse como una zona y no solo como un punto.
@@ -64,10 +79,28 @@ router.post('/chat', async (req, res) => {
       { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' } }
     );
 
+    // Registra la salida y responde. Se espera al guardado (unos ms sobre una
+    // petición de varios segundos) para no perder registros si la instancia se
+    // apaga justo después de responder.
+    const responder = async (payload, extra = {}) => {
+      if (chatLogEnabled()) {
+        await logChatResponse(requestId, {
+          duracionMs: Date.now() - t0,
+          consultasBubble,
+          ...extra,
+          salida: payload
+        }).catch(err => console.error(`Bitácora salida falló: ${err.message}`));
+      }
+      return res.json(payload);
+    };
+
     const assistantMsg = firstRes.data.choices[0].message;
     if (!assistantMsg.tool_calls?.length) {
       const updated = [...conversationHistory, { role: 'assistant', content: assistantMsg.content }];
-      return res.json({ type: 'text', content: assistantMsg.content, updatedHistory: updated });
+      return responder(
+        { type: 'text', content: assistantMsg.content, updatedHistory: updated },
+        { sinBusqueda: true, motivo: 'el modelo no llamó a buscarPropiedades' }
+      );
     }
 
     const toolCall = assistantMsg.tool_calls[0];
@@ -165,10 +198,11 @@ router.post('/chat', async (req, res) => {
         searchParams.km = step.km;
       }
 
-      let results = await searchBubble(searchParams);
+      const registrarQuery = (qs) => consultasBubble.push({ etiqueta: step.etiqueta, query: qs });
+      let results = await searchBubble(searchParams, { onQuery: registrarQuery });
       let exactMatchUsed = true;
       if (searchParams.exactMatch === 'yes' && results.length === 0) {
-        results = await searchBubble({ ...searchParams, exactMatch: 'no' });
+        results = await searchBubble({ ...searchParams, exactMatch: 'no' }, { onQuery: registrarQuery });
         exactMatchUsed = false;
       }
       const countBubble = results.length;
@@ -333,7 +367,7 @@ router.post('/chat', async (req, res) => {
     const formattedProperties = formatProperties(displayProperties);
     const hasMoreAvailable = (totalCount > INITIAL_DISPLAY_COUNT) || (descartada.length > 0);
 
-    return res.json({
+    return responder({
       type: totalCount > 0 ? 'properties' : 'text',
       content: finalMsg.content || '',
       properties: formattedProperties,
@@ -362,10 +396,26 @@ router.post('/chat', async (req, res) => {
         colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado
       },
       updatedHistory
+    }, {
+      // Contexto de auditoría: qué extrajo el modelo y cómo se resolvió.
+      paramsExtraidos: params,
+      intencionUbicacion: {
+        modo: intent.mode, ciudad: intent.ciudad, colonia: intent.colonia,
+        estado: intent.estado, km: intent.km, origen: origenUbicacion
+      },
+      estrategiaUsada: usedStep?.etiqueta || null
     });
 
   } catch (err) {
-    console.error('CHAT ERROR:', err.response?.data || err.message);
+    console.error(`CHAT ERROR [req ${requestId}]:`, err.response?.data || err.message);
+    if (chatLogEnabled()) {
+      await logChatResponse(requestId, {
+        duracionMs: Date.now() - t0,
+        consultasBubble,
+        error: { message: err.message, stack: err.stack, detalle: err.response?.data ?? null },
+        salida: null
+      }).catch(e => console.error(`Bitácora error falló: ${e.message}`));
+    }
     res.status(500).json({ error: 'Error interno', message: err.message });
   }
 });

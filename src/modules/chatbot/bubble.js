@@ -115,7 +115,9 @@ export function parseBubbleProperties(raw) {
   return parseBubblePropertiesDetailed(raw).properties;
 }
 
-export async function searchBubble(params) {
+// onQuery: callback opcional que recibe el query string enviado, para que la
+// bitácora pueda registrar exactamente qué se le pidió a Bubble.
+export async function searchBubble(params, { onQuery } = {}) {
   const q = new URLSearchParams();
   if (params.tipoInmueble?.length)   q.append('tipoInmueble',   JSON.stringify(params.tipoInmueble));
   if (params.tipoOperación?.length)  q.append('tipoOperación',  JSON.stringify(params.tipoOperación));
@@ -155,6 +157,7 @@ export async function searchBubble(params) {
   const url = `${BUBBLE_SEARCH_URL}?${queryString}`;
   // Solo el query string: la URL base puede llevar token y no debe ir a logs.
   console.log(`  -> Bubble query: ${queryString}`);
+  if (typeof onQuery === 'function') onQuery(queryString);
   const res = await axios.get(url, { httpsAgent, timeout: 15000 });
   const data = res.data;
   const raw = data.response?.Propiedades || data.Propiedades;
