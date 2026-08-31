@@ -78,22 +78,31 @@ router.post('/chat', async (req, res) => {
     if (inferredTipos.length > 0) params.tipoInmueble = inferredTipos;
     if (!params.Locacion && inferredMessageLocacion) params.Locacion = inferredMessageLocacion;
 
+    // De dónde salió la ubicación de esta búsqueda. Se le informa al modelo
+    // para que sea transparente ("te muestro en X, tu ubicación") y ofrezca
+    // cambiar de zona, en vez de asumir en silencio.
+    let origenUbicacion = 'ninguna';
+    const teniaUbicacionPropia = Boolean(
+      params.Ciudad?.length || params.Colonia?.length || params.Estado?.length
+      || params.Locacion || params.usarUbicacionUsuario || params.km != null
+    );
+    if (teniaUbicacionPropia) origenUbicacion = 'mensaje';
+
     // Si este turno no menciona ubicación, se hereda la del turno anterior
     // ("casa en Monterrey" -> "ahora de dos pisos" sigue siendo Monterrey).
     const herencia = inheritLocation(params, history);
     params = herencia.params;
     if (herencia.heredada) {
+      origenUbicacion = 'conversacion';
       console.log(`Ubicación heredada del turno anterior | ciudad=[${herencia.heredada.ciudad.join('|') || '-'}] colonia=[${herencia.heredada.colonia.join('|') || '-'}]`);
     }
 
     // Sin ubicación propia ni heredada, se cae al GPS del usuario si lo dio.
-    if (!herencia.heredada && !params.Ciudad?.length && !params.Colonia?.length
-        && !params.Estado?.length && !params.Locacion && !params.usarUbicacionUsuario) {
-      if (userLocation?.ciudad) {
-        params.Ciudad = [userLocation.ciudad];
-        if (userLocation.estado) params.Estado = [userLocation.estado];
-        console.log(`Ubicación tomada del GPS | ciudad=${userLocation.ciudad}`);
-      }
+    if (!herencia.heredada && !teniaUbicacionPropia && userLocation?.ciudad) {
+      params.Ciudad = [userLocation.ciudad];
+      if (userLocation.estado) params.Estado = [userLocation.estado];
+      origenUbicacion = 'gps';
+      console.log(`Ubicación tomada del GPS | ciudad=${userLocation.ciudad}`);
     }
 
     // -----------------------------------------------------------------------
@@ -261,6 +270,14 @@ router.post('/chat', async (req, res) => {
           // Cómo se buscó: por nombre (ciudad/colonia/estado) o por distancia.
           modoBusqueda: intent.mode,
           estrategiaUsada: usedStep?.etiqueta || null,
+          // De dónde salió la ubicación: 'mensaje' (la pidió en este turno),
+          // 'conversacion' (heredada del turno anterior), 'gps' (su ubicación
+          // actual) o 'ninguna'. Si es 'gps' o 'conversacion', DILO en la
+          // respuesta y ofrece cambiar de zona.
+          origenUbicacion,
+          ubicacionGPSDisponible: userLocation?.ciudad
+            ? [userLocation.colonia, userLocation.ciudad, userLocation.estado].filter(Boolean).join(', ')
+            : null,
           clasificacion: {
             exacta: exacta.length, cumple: cumple.length, cercana: cercana.length,
             recomendada: recomendada.length, descartada: descartada.length,

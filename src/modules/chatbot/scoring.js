@@ -189,7 +189,11 @@ export function formatProperties(properties) {
       Proximidad: parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']) ?? null,
       Latitud: coords?.lat ?? null,
       Longitud: coords?.lng ?? null,
-      Score: prop['__score__'] ?? null
+      Score: prop['__score__'] ?? null,
+      // Clasificación calculada: 'exacta' | 'cumple' | 'cercana' | 'recomendada'.
+      // Va como campo aparte porque Score es un número y el front no puede
+      // leer la clasificación de dentro de él.
+      Clasificacion: prop['__classification__'] ?? null
     };
   });
 }
