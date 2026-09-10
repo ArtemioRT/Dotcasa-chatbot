@@ -105,10 +105,16 @@ router.post('/chat', async (req, res) => {
 
     const toolCall = assistantMsg.tool_calls[0];
     let params = JSON.parse(toolCall.function.arguments);
-    params = sanitizeParams(params);
 
-    const inferredTipos = inferTipoInmuebleFromMessage(message);
-    if (inferredTipos.length > 0) params.tipoInmueble = inferredTipos;
+    // La inferencia por palabras clave es solo un respaldo: si el modelo ya
+    // extrajo un tipo (del mensaje o del historial), no se pisa. Antes
+    // reemplazaba siempre, y "cerca de mi casa" metía un filtro de Casa.
+    // Va antes de sanitizeParams para que también se canonicalice y filtre.
+    if (!params.tipoInmueble?.length) {
+      const inferredTipos = inferTipoInmuebleFromMessage(message);
+      if (inferredTipos.length > 0) params.tipoInmueble = inferredTipos;
+    }
+    params = sanitizeParams(params);
     if (!params.Locacion && inferredMessageLocacion) params.Locacion = inferredMessageLocacion;
 
     // De dónde salió la ubicación de esta búsqueda. Se le informa al modelo
