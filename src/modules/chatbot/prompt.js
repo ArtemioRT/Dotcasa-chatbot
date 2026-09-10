@@ -160,7 +160,7 @@ export const CHAT_TOOLS = [{
   type: 'function',
   function: {
     name: 'buscarPropiedades',
-    description: 'Busca propiedades inmobiliarias en DotCasa según los criterios que el usuario haya mencionado, explícita o implícitamente, en el mensaje actual y en el historial de la conversación.',
+    description: 'Busca propiedades inmobiliarias en DotCasa según los criterios que el usuario haya mencionado explícitamente en el mensaje actual o en el historial de la conversación. No asumas tipo de inmueble ni tipo de operación si el usuario no los dijo.',
     parameters: {
       type: 'object',
       properties: {
@@ -274,12 +274,11 @@ export function sanitizeParams(params) {
     if (params.km > 100) params.km = 100;
     if (params.km < 1)   params.km = 2;
   }
-  if (!params.tipoInmueble || params.tipoInmueble.length === 0) {
-    if (params.Habitaciones || params.Banos) {
-      params.tipoInmueble = ['Casa', 'Departamento', 'Rancho', 'Cabaña', 'Quinta'];
-    } else {
-      params.tipoInmueble = ['Casa', 'Departamento'];
-    }
+  // Sin tipo mencionado = sin filtro de tipo. Antes se forzaba
+  // ['Casa','Departamento'] y eso viajaba en searchParams hasta el buscador,
+  // aunque el usuario solo hubiera dicho una ciudad.
+  if (!params.tipoInmueble?.length) {
+    delete params.tipoInmueble;
   }
   if (!params.tipoOperación || params.tipoOperación.length === 0) {
     delete params.tipoOperación;
