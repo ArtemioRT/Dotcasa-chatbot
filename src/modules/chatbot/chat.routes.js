@@ -26,6 +26,9 @@ import {
   isSearchQuery, inferTipoInmuebleFromMessage,
   sanitizeParams, cleanHistory, extractFallbackLocacion
 } from './prompt.js';
+import {
+  checkUserMessage, checkAssistantReply, isDotcasaInfoQuery, getRespuesta, resumenRespaldo
+} from './guardrails.js';
 
 const router = Router();
 
@@ -63,22 +66,6 @@ router.post('/chat', async (req, res) => {
       }
     }
 
-    const conversationHistory = [...history, { role: 'user', content: message }];
-    const inferredMessageLocacion = extractFallbackLocacion(message);
-    const forceSearch = isSearchQuery(message) || Boolean(inferredMessageLocacion);
-
-    const firstRes = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'system', content: buildSystemPrompt(userLocation) }, ...cleanHistory(conversationHistory)],
-        tools: CHAT_TOOLS,
-        tool_choice: forceSearch ? { type: 'function', function: { name: 'buscarPropiedades' } } : 'auto',
-        temperature: 0.1
-      },
-      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
-
     // Registra la salida y responde. Se espera al guardado (unos ms sobre una
     // petición de varios segundos) para no perder registros si la instancia se
     // apaga justo después de responder.
@@ -94,12 +81,57 @@ router.post('/chat', async (req, res) => {
       return res.json(payload);
     };
 
+    // -----------------------------------------------------------------------
+    // 0) GUARDRAILS — solo propiedades y DotCasa. Lo demás se contesta aquí
+    //    sin llamar a OpenAI. El turno bloqueado NO entra al historial, para
+    //    que un intento de desvío no contamine los siguientes turnos.
+    // -----------------------------------------------------------------------
+    const esBusqueda = isSearchQuery(message);
+    const guard = checkUserMessage(message, { tieneIntencionInmobiliaria: esBusqueda });
+    if (!guard.permitido) {
+      console.log(`Mensaje bloqueado | categoria=${guard.categoria}`);
+      return responder(
+        { type: 'text', content: guard.respuesta, updatedHistory: history, blocked: true, blockedReason: guard.categoria, lang: guard.lang },
+        { sinBusqueda: true, motivo: `guardrail: ${guard.categoria}`, idiomaDetectado: guard.lang }
+      );
+    }
+
+    // Idioma aproximado del mensaje, solo para los textos de respaldo. El
+    // modelo responde por su cuenta en el idioma del usuario.
+    const lang = guard.lang;
+    const conversationHistory = [...history, { role: 'user', content: message }];
+    const esInfoDotcasa = isDotcasaInfoQuery(message);
+    // Las preguntas sobre DotCasa ("¿cuánto cuesta publicar propiedades?")
+    // traen palabras de búsqueda, pero no deben forzar buscarPropiedades.
+    const inferredMessageLocacion = esInfoDotcasa ? null : extractFallbackLocacion(message);
+    const forceSearch = !esInfoDotcasa && (esBusqueda || Boolean(inferredMessageLocacion));
+
+    const firstRes = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'system', content: buildSystemPrompt(userLocation) }, ...cleanHistory(conversationHistory)],
+        tools: CHAT_TOOLS,
+        tool_choice: forceSearch ? { type: 'function', function: { name: 'buscarPropiedades' } } : 'auto',
+        temperature: 0.1
+      },
+      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' } }
+    );
+
     const assistantMsg = firstRes.data.choices[0].message;
     if (!assistantMsg.tool_calls?.length) {
+      const revision = checkAssistantReply(assistantMsg.content);
+      if (!revision.seguro) {
+        console.warn(`Respuesta del modelo reemplazada | problemas=${revision.problemas.join(',')}`);
+        return responder(
+          { type: 'text', content: getRespuesta('fueraDeTema', lang), updatedHistory: history, blocked: true, blockedReason: 'respuesta_modelo' },
+          { sinBusqueda: true, motivo: `guardrail salida: ${revision.problemas.join(',')}`, respuestaOriginal: assistantMsg.content }
+        );
+      }
       const updated = [...conversationHistory, { role: 'assistant', content: assistantMsg.content }];
       return responder(
         { type: 'text', content: assistantMsg.content, updatedHistory: updated },
-        { sinBusqueda: true, motivo: 'el modelo no llamó a buscarPropiedades' }
+        { sinBusqueda: true, motivo: esInfoDotcasa ? 'pregunta sobre DotCasa' : 'el modelo no llamó a buscarPropiedades' }
       );
     }
 
@@ -384,7 +416,10 @@ router.post('/chat', async (req, res) => {
           resumenResultados,
           busquedaCriterios: {
             habitaciones: params.Habitaciones || null, banos: params.Banos || null,
+            pisos: params.Pisos || null,
             precio_min: params.Precio_min || null, precio_max: params.Precio_max || null,
+            m2_construccion_min: params.M2_cons_min || null, m2_construccion_max: params.M2_cons_max || null,
+            m2_terreno_min: params.M2_terreno_min || null, m2_terreno_max: params.M2_terreno_max || null,
             tipoOperacion: params.tipoOperación?.join(', ') || null,
             ciudad: intent.ciudad, colonia: intent.colonia, estado: intent.estado,
             tipo: params.tipoInmueble || []
@@ -419,6 +454,11 @@ router.post('/chat', async (req, res) => {
     );
 
     const finalMsg = secondRes.data.choices[0].message;
+    const revisionFinal = checkAssistantReply(finalMsg.content);
+    if (!revisionFinal.seguro) {
+      console.warn(`Resumen del modelo reemplazado | problemas=${revisionFinal.problemas.join(',')}`);
+      finalMsg.content = resumenRespaldo(lang, totalCount);
+    }
     let updatedHistory = [...histWithTool, { role: 'assistant', content: finalMsg.content }];
     if (updatedHistory.length > 12) {
       let idx = updatedHistory.length - 12;

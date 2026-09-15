@@ -2,7 +2,7 @@
 // BUBBLE — búsqueda de propiedades, parseo de respuesta y filtros
 // ============================================================================
 import axios from 'axios';
-import { BUBBLE_SEARCH_URL, BUBBLE_ADMIN_FORMAT } from '../../shared/config.js';
+import { BUBBLE_SEARCH_URL, BUBBLE_ADMIN_FORMAT, BUBBLE_M2_MAX } from '../../shared/config.js';
 import { httpsAgent } from '../../shared/httpAgents.js';
 import { normalizeComparableText, parseBubbleNumber } from '../../shared/utils.js';
 import { dumpPayloadToGCS, dumpEnabled } from '../../shared/gcsDebug.js';
@@ -128,6 +128,10 @@ export async function searchBubble(params, { onQuery } = {}) {
   if (params.Precio_max     != null) q.append('Precio_max',     params.Precio_max);
   if (params.M2_cons_min    != null) q.append('M2_cons_min',    params.M2_cons_min);
   if (params.M2_terreno_min != null) q.append('M2_terreno_min', params.M2_terreno_min);
+  if (BUBBLE_M2_MAX) {
+    if (params.M2_cons_max    != null) q.append('M2_cons_max',    params.M2_cons_max);
+    if (params.M2_terreno_max != null) q.append('M2_terreno_max', params.M2_terreno_max);
+  }
   // Ubicación administrativa. El formato depende de cómo esté hecho el
   // constraint en Bubble; ver BUBBLE_ADMIN_FORMAT en config.
   const formatAdmin = (valores) => {
@@ -306,6 +310,18 @@ export function validateCriteriaMatch(property, criteria, checkExact = false) {
       if (checkExact && pisoCount !== criteria.Pisos) return false;
       if (!checkExact && pisoCount < criteria.Pisos) return false;
     }
+  }
+  // Rangos de m². Igual que arriba: si la ficha no trae el dato, no se descarta.
+  const rangosM2 = [
+    ['M2_cons_min', 'M2_cons_max', ['M2_Construccion', 'M^2_Construccion', 'm2_construccion']],
+    ['M2_terreno_min', 'M2_terreno_max', ['M2_Terreno', 'M^2_Terreno', 'm2_terreno']]
+  ];
+  for (const [kMin, kMax, keys] of rangosM2) {
+    if (criteria[kMin] == null && criteria[kMax] == null) continue;
+    const m2 = getPropNum(property, keys);
+    if (m2 === null) continue;
+    if (criteria[kMin] != null && m2 < criteria[kMin]) return false;
+    if (criteria[kMax] != null && m2 > criteria[kMax]) return false;
   }
   return true;
 }
