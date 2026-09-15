@@ -8,8 +8,8 @@ export const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Marca de build: se imprime al arrancar para saber de un vistazo qué versión
 // está corriendo realmente en Cloud Run. Súbela cuando cambies algo relevante.
-export const APP_VERSION = '1.1.0';
-export const BUILD_TAG   = 'rescate-parseo+volcado-gcs';
+export const APP_VERSION = '1.2.1';
+export const BUILD_TAG   = 'guardrails-multilingue+m2-rango';
 
 export const BUBBLE_SEARCH_URL     = process.env.BUBBLE_SEARCH_URL;
 export const OPENAI_API_KEY        = process.env.OPENAI_API_KEY;
@@ -37,6 +37,11 @@ export const CHAT_LOG_PREFIX = process.env.CHAT_LOG_PREFIX || 'chat-logs';
 //   'plain' -> Monterrey       (si el constraint es Ciudad = <param>)
 //   'csv'   -> Monterrey,San Pedro
 export const BUBBLE_ADMIN_FORMAT = process.env.BUBBLE_ADMIN_FORMAT || 'json';
+
+// Si el workflow de Bubble ya tiene los parámetros M2_cons_max y
+// M2_terreno_max, pon BUBBLE_M2_MAX=true para mandarlos. Mientras tanto, el
+// máximo se aplica solo en el filtro local del backend.
+export const BUBBLE_M2_MAX = process.env.BUBBLE_M2_MAX === 'true';
 
 export const MIN_RESULTS_THRESHOLD  = 3;
 export const MIN_VISIBLE_TARGET     = 15;
