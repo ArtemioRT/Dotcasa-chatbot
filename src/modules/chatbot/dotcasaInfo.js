@@ -23,7 +23,7 @@ Cualquier persona puede describir en lenguaje natural lo que busca y recibir res
 Simplificar y revolucionar la manera en que se conecta la oferta y la demanda inmobiliaria en México, combinando tecnología inteligente, transparencia y una experiencia intuitiva. Queremos que publicar sea tan sencillo como subir una foto y que encontrar el lugar ideal sea tan fácil como describirlo.
 
 ### PREGUNTAS FRECUENTES
-- ¿Cuánto cuesta publicar? Planes flexibles desde $1,499 MXN por propiedad activa al mes, con descuentos conforme aumenta el volumen. Los planes son de suscripción mensual o anual.
+- ¿Cuánto cuesta publicar? Planes flexibles desde $1,900 MXN por propiedad activa al mes, con descuentos conforme aumenta el volumen. Los planes son de suscripción mensual o anual.
 - ¿Pueden publicar particulares? Sí, de forma individual. Los planes están optimizados para inmobiliarias y desarrolladores que administran múltiples propiedades.
 - ¿Cómo funciona la búsqueda con IA? El usuario describe lo que busca (ej. "departamento con terraza en Polanco, 2 recámaras, hasta $25,000 de renta") y el sistema filtra las opciones para mostrar las más relevantes.
 - ¿Cómo llegan los leads? En tiempo real por WhatsApp y correo, y quedan registrados en el panel de DotCasa para gestionarlos, clasificarlos y darles seguimiento.
