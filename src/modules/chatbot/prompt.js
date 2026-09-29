@@ -64,10 +64,8 @@ export function buildSystemPrompt(userLocation) {
         if (userLocation.lat != null && userLocation.lon != null) {
           parts.push(`Coordenadas: ${userLocation.lat}, ${userLocation.lon}`);
         }
-        const comoUsarla = userLocation.ciudad
-          ? `Cuando el usuario diga "cerca de mí", "por aquí" o "en mi zona", llena Ciudad con "${userLocation.ciudad}"${userLocation.colonia ? ` y Colonia con "${userLocation.colonia}"` : ''}. Si además pide una distancia ("a 5 km"), usa usarUbicacionUsuario: true junto con km.`
-          : `Cuando el usuario diga "cerca de mí" o "por aquí", usa usarUbicacionUsuario: true con un km razonable.`;
-        return `\n\n## UBICACIÓN ACTUAL DEL USUARIO (GPS)\n${parts.join('\n')}\n${comoUsarla}\nSi el usuario NO menciona ninguna zona, asume que busca en esta ubicación.`;
+        const comoUsarla = `Cuando el usuario diga "cerca de mí", "por aquí", "en mi zona" o "mi ubicación", usa usarUbicacionUsuario: true (con km solo si da una distancia) y NO llenes Ciudad, Colonia ni Estado con estos datos.`;
+        return `\n\n## UBICACIÓN ACTUAL DEL USUARIO (GPS)\n${parts.join('\n')}\n${comoUsarla}\nSi el usuario NOMBRA un lugar ("propiedad en San Nicolás", "casas en Cumbres"), busca SOLO en ese lugar: NO uses usarUbicacionUsuario ni copies la colonia o ciudad del GPS, aunque el GPS esté activo o la búsqueda anterior haya sido "cerca de mí".\nSi el usuario NO menciona ninguna zona, deja Ciudad, Colonia y Estado vacíos: el sistema usa la zona de la búsqueda anterior o, si no hay, esta ubicación.`;
       })()
     : '';
 

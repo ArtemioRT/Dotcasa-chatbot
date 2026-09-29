@@ -2,9 +2,9 @@
 // BUBBLE — búsqueda de propiedades, parseo de respuesta y filtros
 // ============================================================================
 import axios from 'axios';
-import { BUBBLE_SEARCH_URL, BUBBLE_ADMIN_FORMAT, BUBBLE_M2_MAX } from '../../shared/config.js';
+import { BUBBLE_SEARCH_URL, BUBBLE_ADMIN_FORMAT, BUBBLE_M2_MAX, BUBBLE_TIMEOUT_MS } from '../../shared/config.js';
 import { httpsAgent } from '../../shared/httpAgents.js';
-import { normalizeComparableText, parseBubbleNumber } from '../../shared/utils.js';
+import { normalizeComparableText, normalizeSearchText, parseBubbleNumber } from '../../shared/utils.js';
 import { dumpPayloadToGCS, dumpEnabled } from '../../shared/gcsDebug.js';
 import { parsePropertyCoords, haversineKm } from './geocoding.js';
 
@@ -115,9 +115,19 @@ export function parseBubbleProperties(raw) {
   return parseBubblePropertiesDetailed(raw).properties;
 }
 
+// Timeouts de axios / red: Bubble tardó demasiado o la conexión se cayó.
+// Se distinguen del resto de errores para degradar en vez de tirar un 500.
+export function isTimeoutError(err) {
+  if (!err) return false;
+  if (['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'ERR_CANCELED'].includes(err.code)) return true;
+  return /timeout/i.test(err.message || '');
+}
+
 // onQuery: callback opcional que recibe el query string enviado, para que la
 // bitácora pueda registrar exactamente qué se le pidió a Bubble.
-export async function searchBubble(params, { onQuery } = {}) {
+// timeoutMs: tope de esta llamada; el llamador lo recorta al tiempo que le
+// queda a la petición completa.
+export async function searchBubble(params, { onQuery, timeoutMs = BUBBLE_TIMEOUT_MS } = {}) {
   const q = new URLSearchParams();
   if (params.tipoInmueble?.length)   q.append('tipoInmueble',   JSON.stringify(params.tipoInmueble));
   if (params.tipoOperación?.length)  q.append('tipoOperación',  JSON.stringify(params.tipoOperación));
@@ -163,7 +173,7 @@ export async function searchBubble(params, { onQuery } = {}) {
   // Solo el query string: la URL base puede llevar token y no debe ir a logs.
   console.log(`  -> Bubble query: ${queryString}`);
   if (typeof onQuery === 'function') onQuery(queryString);
-  const res = await axios.get(url, { httpsAgent, timeout: 15000 });
+  const res = await axios.get(url, { httpsAgent, timeout: timeoutMs });
   const data = res.data;
   const raw = data.response?.Propiedades || data.Propiedades;
 
@@ -191,6 +201,53 @@ export async function searchBubble(params, { onQuery } = {}) {
   }
 
   return properties;
+}
+
+// ---------------------------------------------------------------------------
+// Coordenadas no confiables
+// ---------------------------------------------------------------------------
+// Parte de la base trae coordenadas de relleno: el importador geocodifica la
+// colonia de la ficha ("Predio Aldape San Nicolás") y deja a decenas de
+// propiedades de colonias y hasta municipios distintos en el MISMO punto
+// (25.7123067,-100.2934735). Por distancia parecen estar "a 1.7 km de ti",
+// aunque su campo Ciudad diga San Pedro o Monterrey. Un punto compartido por
+// varias propiedades con colonias o ciudades distintas no es un edificio: es
+// un relleno, y su distancia no significa nada.
+export const SUSPICIOUS_MIN_PROPS = 3;
+export const SUSPICIOUS_MIN_COLONIAS = 3;
+
+function coordKey(prop) {
+  const coords = parsePropertyCoords(prop);
+  if (!coords) return null;
+  return `${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}`;
+}
+
+export function findSuspiciousCoordKeys(properties = []) {
+  const grupos = new Map();
+  for (const prop of properties) {
+    const key = coordKey(prop);
+    if (!key) continue;
+    if (!grupos.has(key)) grupos.set(key, { n: 0, colonias: new Set(), ciudades: new Set() });
+    const g = grupos.get(key);
+    g.n++;
+    const colonia = normalizeSearchText(prop['Colonia'] || prop['colonia']);
+    const ciudad  = normalizeSearchText(prop['Ciudad'] || prop['ciudad']);
+    if (colonia) g.colonias.add(colonia);
+    if (ciudad)  g.ciudades.add(ciudad);
+  }
+  const sospechosas = new Set();
+  for (const [key, g] of grupos) {
+    if (g.n >= SUSPICIOUS_MIN_PROPS && (g.colonias.size >= SUSPICIOUS_MIN_COLONIAS || g.ciudades.size >= 2)) {
+      sospechosas.add(key);
+    }
+  }
+  return sospechosas;
+}
+
+export function hasSuspiciousCoords(prop, suspiciousKeys) {
+  if (!suspiciousKeys?.size) return false;
+  const key = coordKey(prop);
+  return Boolean(key) && suspiciousKeys.has(key);
 }
 
 export function getLocationTerms(locacion) {
@@ -240,9 +297,11 @@ export function filterPropertiesByLocationText(properties, locacion) {
 // Anota Proximidad (km desde refCoords) sin descartar ninguna propiedad.
 // Se usa en búsquedas por ciudad/estado, donde la pertenencia la define el
 // match textual sobre Ciudad/Estado y el radio solo serviría para ordenar.
-export function annotateProximity(properties, refCoords) {
+export function annotateProximity(properties, refCoords, { suspiciousKeys } = {}) {
   if (!refCoords) return properties;
   const annotated = properties.map(prop => {
+    // Con coordenadas de relleno la distancia sería inventada.
+    if (hasSuspiciousCoords(prop, suspiciousKeys)) return { ...prop, Proximidad: null };
     const existingProximity = parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']);
     if (existingProximity !== null && !isNaN(existingProximity)) {
       return { ...prop, Proximidad: parseFloat(existingProximity.toFixed(2)) };
@@ -258,10 +317,21 @@ export function annotateProximity(properties, refCoords) {
   return annotated;
 }
 
-export function filterByProximity(properties, refCoords, radiusKm) {
+// suspiciousKeys: puntos de relleno (ver findSuspiciousCoordKeys). Esas
+// propiedades no entran por distancia; solo entran si su campo Ciudad coincide
+// con refCiudad (la ciudad del punto de referencia), y sin distancia.
+export function filterByProximity(properties, refCoords, radiusKm, { suspiciousKeys, refCiudad } = {}) {
   if (!refCoords) return properties.map(p => ({ ...p, Proximidad: null }));
   const filtered = [];
+  const ciudadRef = normalizeSearchText(refCiudad);
   for (const prop of properties) {
+    if (hasSuspiciousCoords(prop, suspiciousKeys)) {
+      const ciudadProp = normalizeSearchText(prop['Ciudad'] || prop['ciudad']);
+      if (ciudadRef && ciudadProp && (ciudadProp === ciudadRef || ciudadProp.includes(ciudadRef) || ciudadRef.includes(ciudadProp))) {
+        filtered.push({ ...prop, Proximidad: null });
+      }
+      continue;
+    }
     const existingProximity = parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']);
     if (existingProximity !== null && !isNaN(existingProximity)) {
       if (existingProximity <= radiusKm) {
