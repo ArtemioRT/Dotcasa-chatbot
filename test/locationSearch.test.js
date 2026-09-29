@@ -73,3 +73,11 @@ test('findSuspiciousCoordKeys: un edificio con varias unidades no es relleno', (
   assert.deepEqual(cerca.map(p => p.Colonia), ['C']);
   assert.equal(cerca[0].Proximidad, null);
 });
+
+test('ciudadConocida tolera typos', async () => {
+  const { ciudadConocida } = await import('../src/modules/chatbot/locationSearch.js');
+  assert.equal(ciudadConocida('san nicolas de los gara')?.ciudad, 'San Nicolás de los Garza');
+  assert.equal(ciudadConocida('monterey')?.ciudad, 'Monterrey');
+  assert.equal(ciudadConocida('cumbres'), null);
+  assert.equal(ciudadConocida('guadalupana'), null);
+});

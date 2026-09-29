@@ -115,3 +115,48 @@ test('"cerca de mí" en un mensaje que además nombra una zona de distancia se r
   assert.equal(json.ubicacion.modo, 'radio');
   assert.equal(json.ubicacion.radiusKm, 3);
 });
+
+// Regresión reportada en producción: con el typo "gara" se descartaba la
+// ciudad correcta del modelo por ser igual a la del GPS y se buscaba la
+// ciudad literal "san nicolas de los gara" (0 resultados -> 25 km, 1379).
+test('typo en el lugar escrito: se conserva la ciudad corregida por el modelo aunque sea la del GPS', async () => {
+  const { json, bubbleCalls } = await runChat({
+    body: { message: 'propiedad en san nicolas de los gara', history: [], location: GPS_SAN_NICOLAS },
+    toolArgs: { Ciudad: ['San Nicolás de los Garza'] },
+    bubble: () => BASE
+  });
+  assert.equal(bubbleCalls[0].get('Ciudad'), '["San Nicolás de los Garza"]');
+  assert.equal(json.ubicacion.modo, 'ciudad');
+  assert.ok(soloSanNicolas(json));
+  assert.equal(json.totalCount, 2);
+});
+
+test('typo en el lugar escrito y el modelo no extrae nada: se corrige al municipio conocido', async () => {
+  const { json, bubbleCalls } = await runChat({
+    body: { message: 'propiedad en san nicolas de los gara', history: [], location: GPS_SAN_NICOLAS },
+    toolArgs: {},
+    bubble: () => BASE
+  });
+  assert.equal(bubbleCalls[0].get('Ciudad'), '["San Nicolás de los Garza"]');
+  assert.equal(json.totalCount, 2);
+});
+
+test('typo sin GPS: mismo resultado', async () => {
+  const { json, bubbleCalls } = await runChat({
+    body: { message: 'propiedad en san nicolas de los gara', history: [] },
+    toolArgs: { Ciudad: ['San Nicolás de los Garza'] },
+    bubble: () => BASE
+  });
+  assert.equal(bubbleCalls[0].get('Ciudad'), '["San Nicolás de los Garza"]');
+  assert.equal(json.totalCount, 2);
+});
+
+test('lugar escrito distinto al GPS: la ciudad del GPS copiada por el modelo sí se descarta', async () => {
+  const { json } = await runChat({
+    body: { message: 'casas en cumbres', history: [], location: GPS_SAN_NICOLAS },
+    toolArgs: { Colonia: ['Cumbres'], Ciudad: ['San Nicolás de los Garza'] },
+    bubble: () => BASE
+  });
+  assert.deepEqual(json.ubicacion.ciudad, []);
+  assert.deepEqual(json.ubicacion.colonia, ['Cumbres']);
+});
