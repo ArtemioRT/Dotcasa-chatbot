@@ -43,6 +43,13 @@ export const BUBBLE_ADMIN_FORMAT = process.env.BUBBLE_ADMIN_FORMAT || 'json';
 // máximo se aplica solo en el filtro local del backend.
 export const BUBBLE_M2_MAX = process.env.BUBBLE_M2_MAX === 'true';
 
+// Bubble: tope por llamada y presupuesto total para todo el plan de búsqueda
+// (varios pasos + reintentos). Cloud Run corta la petición a los 60 s, así que
+// el plan completo tiene que caber holgado antes de las dos llamadas a OpenAI.
+export const BUBBLE_TIMEOUT_MS       = Number(process.env.BUBBLE_TIMEOUT_MS) || 15000;
+export const BUBBLE_SEARCH_BUDGET_MS = Number(process.env.BUBBLE_SEARCH_BUDGET_MS) || 25000;
+export const OPENAI_TIMEOUT_MS       = Number(process.env.OPENAI_TIMEOUT_MS) || 20000;
+
 export const MIN_RESULTS_THRESHOLD  = 3;
 export const MIN_VISIBLE_TARGET     = 15;
 export const INITIAL_DISPLAY_COUNT  = 3;

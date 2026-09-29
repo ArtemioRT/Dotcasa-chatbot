@@ -212,6 +212,15 @@ const TEXTOS = {
     fr: 'Je vous aide à trouver des biens sur DotCasa. Dites-moi si vous voulez louer ou acheter, le type de bien (maison, appartement, terrain, bureau, local, entrepôt...) et le secteur (quartier, ville ou État). Je peux aussi filtrer par chambres, salles de bain, étages, budget et mètres carrés construits ou de terrain. Je réponds aussi à vos questions sur DotCasa (offres de publication, contact, conditions).',
     de: 'Ich helfe dir, Immobilien auf DotCasa zu finden. Sag mir, ob du mieten oder kaufen willst, die Objektart (Haus, Wohnung, Grundstück, Büro, Ladenfläche, Lager...) und die Gegend (Viertel, Stadt oder Bundesstaat). Ich kann auch nach Schlafzimmern, Bädern, Etagen, Budget und Wohn- oder Grundstücksfläche filtern. Und ich beantworte Fragen zu DotCasa (Inseratspakete, Kontakt, Bedingungen).'
   },
+  // Bubble u OpenAI no respondieron a tiempo. Mejor esto que un error 500.
+  busquedaLenta: {
+    es: 'La búsqueda está tardando más de lo normal y no alcancé a traer resultados. ¿Me lo intentas de nuevo en un momento? Si quieres, dime la zona y el tipo de inmueble para hacerla más rápida.',
+    en: 'The search is taking longer than usual and I could not get results in time. Could you try again in a moment? Telling me the area and property type makes it faster.',
+    pt: 'A busca está demorando mais do que o normal e não consegui trazer resultados a tempo. Pode tentar de novo em instantes? Informar a região e o tipo de imóvel deixa a busca mais rápida.',
+    it: 'La ricerca sta impiegando più del solito e non sono riuscito a ottenere risultati in tempo. Puoi riprovare tra un momento? Indicare zona e tipo di immobile la rende più veloce.',
+    fr: "La recherche prend plus de temps que d'habitude et je n'ai pas pu obtenir de résultats à temps. Pouvez-vous réessayer dans un instant ? Préciser le secteur et le type de bien la rend plus rapide.",
+    de: 'Die Suche dauert länger als üblich und ich konnte nicht rechtzeitig Ergebnisse laden. Kannst du es gleich noch einmal versuchen? Mit Gegend und Objektart geht es schneller.'
+  },
   muyLargo: {
     es: `Tu mensaje es un poco largo. ¿Me lo resumes en menos de ${MAX_MESSAGE_LENGTH} caracteres? Por ejemplo: "departamento en renta en San Pedro, 2 recámaras, hasta $25,000".`,
     en: `Your message is a bit long. Could you shorten it to under ${MAX_MESSAGE_LENGTH} characters? For example: "2-bedroom apartment for rent in San Pedro, up to $25,000".`,

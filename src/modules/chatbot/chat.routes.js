@@ -5,7 +5,8 @@ import { Router } from 'express';
 import axios from 'axios';
 import {
   OPENAI_API_KEY, MIN_VISIBLE_TARGET,
-  INITIAL_DISPLAY_COUNT, MAX_PROPERTIES_TO_SHOW
+  INITIAL_DISPLAY_COUNT, MAX_PROPERTIES_TO_SHOW,
+  BUBBLE_TIMEOUT_MS, BUBBLE_SEARCH_BUDGET_MS, OPENAI_TIMEOUT_MS
 } from '../../shared/config.js';
 import { parseBubbleNumber, normalizeSearchText } from '../../shared/utils.js';
 import {
@@ -14,11 +15,11 @@ import {
 import { geocodeLocation, parseLocacionSmart, reverseGeocode } from './geocoding.js';
 import {
   searchBubble, filterByProximity, annotateProximity,
-  validateCriteriaMatch, getPropNum
+  validateCriteriaMatch, getPropNum, isTimeoutError, findSuspiciousCoordKeys
 } from './bubble.js';
 import {
   resolveLocationIntent, buildSearchPlan, filterByAdminLocation,
-  inheritLocation, SEARCH_MODE
+  inheritLocation, reconcileLocationParams, SEARCH_MODE, GPS_DISPLAY_NAME
 } from './locationSearch.js';
 import { classifyAndScoreProperties, formatProperties } from './scoring.js';
 import { ordenarConDestacados, esDestacada } from './destacados.js';
@@ -32,6 +33,15 @@ import {
 } from './guardrails.js';
 
 const router = Router();
+
+// Llamada a OpenAI con tope de tiempo: sin timeout, un modelo lento dejaba la
+// petición colgada hasta que Cloud Run la cortaba.
+function openaiChat(body) {
+  return axios.post('https://api.openai.com/v1/chat/completions', body, {
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    timeout: OPENAI_TIMEOUT_MS
+  });
+}
 
 router.post('/chat', async (req, res) => {
   const t0 = Date.now();
@@ -107,17 +117,31 @@ router.post('/chat', async (req, res) => {
     const inferredMessageLocacion = esInfoDotcasa ? null : extractFallbackLocacion(message);
     const forceSearch = !esInfoDotcasa && (esBusqueda || Boolean(inferredMessageLocacion));
 
-    const firstRes = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
+    // Respuesta amable cuando algo externo no contestó a tiempo. El turno
+    // queda en el historial sin tool call, para que no se herede una búsqueda
+    // que nunca se hizo.
+    const responderLento = (motivo, extra = {}) => {
+      const content = getRespuesta('busquedaLenta', lang);
+      return responder(
+        { type: 'text', content, updatedHistory: [...conversationHistory, { role: 'assistant', content }], searchError: 'timeout' },
+        { sinBusqueda: true, motivo, ...extra }
+      );
+    };
+
+    let firstRes;
+    try {
+      firstRes = await openaiChat({
         model: 'gpt-4o-mini',
         messages: [{ role: 'system', content: buildSystemPrompt(userLocation) }, ...cleanHistory(conversationHistory)],
         tools: CHAT_TOOLS,
         tool_choice: forceSearch ? { type: 'function', function: { name: 'buscarPropiedades' } } : 'auto',
         temperature: 0.1
-      },
-      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
+      });
+    } catch (err) {
+      if (!isTimeoutError(err)) throw err;
+      console.warn(`OpenAI (extracción) no respondió a tiempo: ${err.message}`);
+      return responderLento('timeout OpenAI (extracción)');
+    }
 
     const assistantMsg = firstRes.data.choices[0].message;
     if (!assistantMsg.tool_calls?.length) {
@@ -150,6 +174,14 @@ router.post('/chat', async (req, res) => {
     params = sanitizeParams(params);
     if (!params.Locacion && inferredMessageLocacion) params.Locacion = inferredMessageLocacion;
 
+    // Lo que el usuario escribió en ESTE mensaje manda sobre el GPS y sobre la
+    // búsqueda anterior: "propiedad en San Nicolás" con el GPS prendido busca
+    // en San Nicolás, no a 5 km del usuario ni en la zona de antes.
+    const conciliacion = reconcileLocationParams(params, { message, userLocation });
+    params = conciliacion.params;
+    if (conciliacion.ajustes.length) console.log(`Ubicación conciliada con el mensaje | ${conciliacion.ajustes.join(' ; ')}`);
+    const tieneGPS = userLocation?.lat != null && userLocation?.lon != null;
+
     // De dónde salió la ubicación de esta búsqueda. Se le informa al modelo
     // para que sea transparente ("te muestro en X, tu ubicación") y ofrezca
     // cambiar de zona, en vez de asumir en silencio.
@@ -162,11 +194,11 @@ router.post('/chat', async (req, res) => {
 
     // Si este turno no menciona ubicación, se hereda la del turno anterior
     // ("casa en Monterrey" -> "ahora de dos pisos" sigue siendo Monterrey).
-    const herencia = inheritLocation(params, history);
+    const herencia = inheritLocation(params, history, { gpsDisponible: tieneGPS });
     params = herencia.params;
     if (herencia.heredada) {
       origenUbicacion = 'conversacion';
-      console.log(`Ubicación heredada del turno anterior | ciudad=[${herencia.heredada.ciudad.join('|') || '-'}] colonia=[${herencia.heredada.colonia.join('|') || '-'}]`);
+      console.log(`Ubicación heredada del turno anterior | ciudad=[${herencia.heredada.ciudad.join('|') || '-'}] colonia=[${herencia.heredada.colonia.join('|') || '-'}]${herencia.heredada.gps ? ' (GPS)' : ''}`);
     }
 
     // Sin ubicación propia ni heredada, se cae al GPS del usuario si lo dio.
@@ -210,7 +242,7 @@ router.post('/chat', async (req, res) => {
     if (necesitaCoords) {
       if (intent.gpsCoords) {
         refCoords = intent.gpsCoords;
-        geocodedDisplay = 'Ubicación del usuario (GPS)';
+        geocodedDisplay = GPS_DISPLAY_NAME;
       } else if (intent.referencia) {
         refCoords = await geocodeLocation(intent.referencia);
         geocodedDisplay = refCoords?.displayName || intent.referencia;
@@ -221,6 +253,39 @@ router.post('/chat', async (req, res) => {
     // 3) EJECUTAR EL PLAN — cada paso es una estrategia DISTINTA, no el mismo
     //    query con otro radio. Se corta en cuanto un paso da resultados.
     // -----------------------------------------------------------------------
+    // Presupuesto de tiempo para TODO el plan. Antes cada llamada tenía 15 s
+    // propios y un solo timeout de Bubble tiraba la petición entera con 500.
+    const deadline = Date.now() + BUBBLE_SEARCH_BUDGET_MS;
+    let bubbleFallo = null;
+    // Ciudad de referencia para las propiedades con coordenadas de relleno:
+    // solo entran a una búsqueda por distancia si su Ciudad coincide.
+    const refCiudad = intent.gpsCoords ? (userLocation?.ciudad || null) : (intent.ciudad[0] || null);
+
+    // Una llamada a Bubble con el tiempo que queda. Si se agota, reintenta
+    // UNA vez (Bubble a veces tarda en frío) y si vuelve a fallar deja de
+    // consultar: devuelve null y el plan se detiene sin tirar la petición.
+    const consultarBubble = async (searchParams, registrarQuery) => {
+      for (let intento = 1; intento <= 2; intento++) {
+        const restante = deadline - Date.now();
+        if (restante < 1000) {
+          bubbleFallo = bubbleFallo || 'sin tiempo para consultar Bubble';
+          return null;
+        }
+        try {
+          return await searchBubble(searchParams, {
+            onQuery: registrarQuery,
+            timeoutMs: Math.min(BUBBLE_TIMEOUT_MS, restante)
+          });
+        } catch (err) {
+          if (!isTimeoutError(err)) throw err;
+          console.warn(`  Bubble no respondió a tiempo (intento ${intento}): ${err.message}`);
+          consultasBubble.push({ error: `timeout (intento ${intento})`, mensaje: err.message });
+          bubbleFallo = err.message;
+        }
+      }
+      return null;
+    };
+
     const runStep = async (step) => {
       const searchParams = { ...params };
       // Cada paso define su propia ubicación; limpiamos lo que no aplique.
@@ -228,9 +293,12 @@ router.post('/chat', async (req, res) => {
       delete searchParams.Locacion; delete searchParams.km;
 
       if (step.tipo === 'admin') {
-        if (step.ciudad)  searchParams.Ciudad  = step.ciudad;
-        if (step.estado)  searchParams.Estado  = step.estado;
-        if (step.colonia) searchParams.Colonia = step.colonia;
+        if (step.ciudad?.length)  searchParams.Ciudad  = step.ciudad;
+        // Con ciudad, el estado se filtra localmente (filterByAdminLocation) y
+        // no viaja a Bubble: Ciudad+Estado es la consulta que se quedaba
+        // colgada, y la de solo Ciudad es la que ya daba el resultado correcto.
+        if (step.estado?.length && !step.ciudad?.length) searchParams.Estado = step.estado;
+        if (step.colonia?.length) searchParams.Colonia = step.colonia;
       } else if (step.tipo === 'geo') {
         if (!refCoords) return null; // sin punto de referencia no hay geo
         searchParams.LocacionBubble = intent.referencia || null;
@@ -242,14 +310,21 @@ router.post('/chat', async (req, res) => {
       // exactMatch=no es el modo por defecto. Si Bubble no devuelve nada, se
       // reintenta la MISMA consulta con exactMatch=yes, que flexibiliza el
       // criterio del lado de Bubble.
-      let results = await searchBubble({ ...searchParams, exactMatch: 'no' }, { onQuery: registrarQuery });
+      let results = await consultarBubble({ ...searchParams, exactMatch: 'no' }, registrarQuery);
+      if (results === null) return { fallo: true };
       let usoReintentoExactMatch = false;
       if (results.length === 0) {
-        results = await searchBubble({ ...searchParams, exactMatch: 'yes' }, { onQuery: registrarQuery });
+        const reintento = await consultarBubble({ ...searchParams, exactMatch: 'yes' }, registrarQuery);
+        if (reintento === null) return { fallo: true };
+        results = reintento;
         usoReintentoExactMatch = true;
         console.log(`  [${step.etiqueta}] 0 resultados con exactMatch=no, reintento con exactMatch=yes -> ${results.length}`);
       }
       const countBubble = results.length;
+      // Puntos compartidos por propiedades de colonias/ciudades distintas: son
+      // coordenadas de relleno y su distancia no es real.
+      const suspiciousKeys = findSuspiciousCoordKeys(results);
+      if (suspiciousKeys.size) console.log(`  [${step.etiqueta}] coordenadas de relleno detectadas: ${[...suspiciousKeys].join(' ; ')}`);
 
       results = results.filter(prop => validateCriteriaMatch(prop, params, false));
       const countCriteria = results.length;
@@ -264,9 +339,9 @@ router.post('/chat', async (req, res) => {
         });
         results = adminFiltered.properties;
         matchType = adminFiltered.matchType;
-        if (refCoords) results = annotateProximity(results, refCoords);
+        if (refCoords) results = annotateProximity(results, refCoords, { suspiciousKeys });
       } else if (step.tipo === 'geo') {
-        results = filterByProximity(results, refCoords, step.km);
+        results = filterByProximity(results, refCoords, step.km, { suspiciousKeys, refCiudad });
         matchType = results.length ? 'geo' : 'none';
       }
 
@@ -285,7 +360,7 @@ router.post('/chat', async (req, res) => {
     for (const step of plan) {
       if (step.tipo === 'none') {
         const attempt = await runStep({ ...step, tipo: 'admin' });
-        if (attempt) {
+        if (attempt && !attempt.fallo) {
           properties = attempt.results;
           if (!attempt.exactMatchUsed) isExactMatch = false;
           locationMatchType = attempt.locationMatchType;
@@ -295,6 +370,8 @@ router.post('/chat', async (req, res) => {
       }
       const attempt = await runStep(step);
       if (!attempt) continue;
+      // Bubble no respondió: no se siguen probando pasos (serían más pesados).
+      if (attempt.fallo) break;
       const visibles = classifyAndScoreProperties(attempt.results, params, refCoords).allClassified.length;
       // Nos quedamos con el primer paso que produzca resultados visibles.
       if (visibles > 0 || (!usedStep && attempt.results.length > 0)) {
@@ -308,6 +385,16 @@ router.post('/chat', async (req, res) => {
       if (!usedStep) { usedStep = step; usedRadius = attempt.radiusKm; }
     }
     if (usedStep) console.log(`Estrategia usada: ${usedStep.etiqueta} | ${properties.length} propiedades`);
+
+    // Sin resultados porque Bubble no contestó: decir "no hay propiedades"
+    // sería falso. Se avisa que tardó y se pide reintentar.
+    if (bubbleFallo && properties.length === 0) {
+      console.warn(`Búsqueda sin resultados por Bubble lento: ${bubbleFallo}`);
+      return responderLento('timeout Bubble', {
+        paramsExtraidos: params,
+        intencionUbicacion: { modo: intent.mode, ciudad: intent.ciudad, colonia: intent.colonia, estado: intent.estado, km: intent.km, origen: origenUbicacion }
+      });
+    }
 
     const { exacta, cumple, cercana, recomendada, descartada, top3, allClassified } = classifyAndScoreProperties(properties, params, refCoords);
     const totalCount = allClassified.length;
@@ -378,7 +465,7 @@ router.post('/chat', async (req, res) => {
     // que son distancias al usuario, y afirma "a 0.85 km de ti" sobre
     // propiedades que están a cientos de kilómetros.
     const proximidadReferencia = refCoords
-      ? (geocodedDisplay === 'Ubicación del usuario (GPS)'
+      ? (geocodedDisplay === GPS_DISPLAY_NAME
           ? 'DISTANCIA REAL AL USUARIO: puedes decir "de ti" o "de tu ubicación".'
           : `Distancia al centro de "${geocodedDisplay}", NO al usuario. NUNCA digas "de ti" ni "de tu ubicación" con estos valores; si acaso, di "del centro de la zona".`)
       : 'No se calcularon distancias. NO menciones cercanía ni kilómetros.';
@@ -455,16 +542,20 @@ router.post('/chat', async (req, res) => {
       }
     ];
 
-    const secondRes = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
+    // Si el resumen del modelo no llega a tiempo, las propiedades ya están:
+    // se entregan con un texto de respaldo en vez de perderlas con un 500.
+    let finalMsg;
+    try {
+      const secondRes = await openaiChat({
         model: 'gpt-4o-mini',
         messages: [{ role: 'system', content: buildSystemPrompt(userLocation) }, ...cleanHistory(histWithTool)]
-      },
-      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
-
-    const finalMsg = secondRes.data.choices[0].message;
+      });
+      finalMsg = secondRes.data.choices[0].message;
+    } catch (err) {
+      if (!isTimeoutError(err)) throw err;
+      console.warn(`OpenAI (resumen) no respondió a tiempo: ${err.message}`);
+      finalMsg = { role: 'assistant', content: resumenRespaldo(lang, totalCount) };
+    }
     const revisionFinal = checkAssistantReply(finalMsg.content);
     if (!revisionFinal.seguro) {
       console.warn(`Resumen del modelo reemplazado | problemas=${revisionFinal.problemas.join(',')}`);
@@ -528,7 +619,8 @@ router.post('/chat', async (req, res) => {
       paramsExtraidos: params,
       intencionUbicacion: {
         modo: intent.mode, ciudad: intent.ciudad, colonia: intent.colonia,
-        estado: intent.estado, km: intent.km, origen: origenUbicacion
+        estado: intent.estado, km: intent.km, origen: origenUbicacion,
+        lugarEnMensaje: conciliacion.lugarMensaje, ajustes: conciliacion.ajustes
       },
       estrategiaUsada: usedStep?.etiqueta || null
     });
@@ -542,6 +634,17 @@ router.post('/chat', async (req, res) => {
         error: { message: err.message, stack: err.stack, detalle: err.response?.data ?? null },
         salida: null
       }).catch(e => console.error(`Bitácora error falló: ${e.message}`));
+    }
+    if (res.headersSent) return;
+    // Un timeout que se escapó (Mapbox, OpenAI, Bubble) no es un error del
+    // usuario: se le pide reintentar en vez de mostrarle un 500.
+    if (isTimeoutError(err)) {
+      const content = getRespuesta('busquedaLenta', 'es');
+      const { message, history = [] } = req.body || {};
+      return res.json({
+        type: 'text', content, searchError: 'timeout',
+        updatedHistory: message ? [...history, { role: 'user', content: message }, { role: 'assistant', content }] : history
+      });
     }
     res.status(500).json({ error: 'Error interno', message: err.message });
   }
