@@ -189,6 +189,8 @@ export function formatProperties(properties) {
       Proximidad: parseBubbleNumber(prop['Proximidad'] ?? prop['proximidad']) ?? null,
       Latitud: coords?.lat ?? null,
       Longitud: coords?.lng ?? null,
+      // Normalizado a 'yes' | 'no' para que el front solo compare un valor.
+      Destacado: ['yes', 'true', 'si', 'sí', '1'].includes(String(prop['Destacado'] ?? prop['destacado'] ?? '').trim().toLowerCase()) ? 'yes' : 'no',
       Score: prop['__score__'] ?? null,
       // Clasificación calculada: 'exacta' | 'cumple' | 'cercana' | 'recomendada'.
       // Va como campo aparte porque Score es un número y el front no puede

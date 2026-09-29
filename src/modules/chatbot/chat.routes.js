@@ -21,6 +21,7 @@ import {
   inheritLocation, SEARCH_MODE
 } from './locationSearch.js';
 import { classifyAndScoreProperties, formatProperties } from './scoring.js';
+import { ordenarConDestacados, esDestacada } from './destacados.js';
 import {
   buildSystemPrompt, CHAT_TOOLS,
   isSearchQuery, inferTipoInmuebleFromMessage,
@@ -310,9 +311,16 @@ router.post('/chat', async (req, res) => {
 
     const { exacta, cumple, cercana, recomendada, descartada, top3, allClassified } = classifyAndScoreProperties(properties, params, refCoords);
     const totalCount = allClassified.length;
-    const displayProperties = allClassified.slice(0, Math.min(MAX_PROPERTIES_TO_SHOW, totalCount));
+    // Por nivel de clasificación, destacadas primero (rotando cada 15 min) y luego
+    // el resto por score. Se
+    // ordena ANTES de recortar, para que una destacada no quede fuera del tope.
+    const ordenadas = ordenarConDestacados(allClassified);
+    const displayProperties = ordenadas.slice(0, Math.min(MAX_PROPERTIES_TO_SHOW, totalCount));
+    console.log(`Destacadas: ${allClassified.filter(esDestacada).length}/${totalCount} | primeras 3 mostradas: ${displayProperties.slice(0, 3).filter(esDestacada).length} destacadas`);
 
-    const propertiesSummary = top3.map((prop, idx) => ({
+    // El resumen que ve el modelo debe describir las MISMAS 3 tarjetas que el
+    // usuario ve primero; antes salía del top 3 por score.
+    const propertiesSummary = displayProperties.slice(0, 3).map((prop, idx) => ({
       posicion: idx + 1,
       tipo: prop['Tipo_de_inmueble'] || prop['tipo_de_inmueble'] || '',
       habitaciones: getPropNum(prop, ['N_Habitaciones', 'Habitaciones', 'habitaciones']),
