@@ -102,7 +102,7 @@ test('después de "cerca de mí", un refinamiento sin zona sigue siendo cerca de
     toolArgs: { tipoInmueble: ['Casa'] },
     bubble: () => BASE
   });
-  assert.equal(json.ubicacion.modo, 'radio');
+  assert.deepEqual(json.ubicacion.ciudad, ['San Nicolás de los Garza']);
   assert.equal(json.ubicacion.geocoded, 'Ubicación del usuario (GPS)');
 });
 

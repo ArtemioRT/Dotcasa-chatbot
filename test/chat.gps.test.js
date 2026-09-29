@@ -28,22 +28,50 @@ async function cercaDeMi(toolArgs) {
   });
 }
 
-test('cerca de mí: descarta fichas de otro municipio con coordenadas de relleno', async () => {
+test('cerca de mí da las mismas propiedades que escribir su ciudad (la petición 2 es la correcta)', async () => {
+  const gps = await cercaDeMi({ usarUbicacionUsuario: true });
+  const ciudad = await runChat({
+    body: { message: 'propiedad en san nicolas de los garza', history: [] },
+    toolArgs: { Ciudad: ['San Nicolás de los Garza'] },
+    bubble: () => BASE
+  });
+  assert.equal(gps.bubbleCalls[0].toString(), ciudad.bubbleCalls[0].toString());
+  assert.equal(gps.json.totalCount, ciudad.json.totalCount);
+  assert.deepEqual(gps.json.properties.map(p => p.Link).sort(), ciudad.json.properties.map(p => p.Link).sort());
+  assert.ok(gps.json.properties.every(p => p.Ciudad === 'San Nicolás de los Garza'));
+  assert.equal(gps.json.ubicacion.modo, 'ciudad');
+  assert.deepEqual(gps.json.ubicacion.ciudad, ['San Nicolás de los Garza']);
+});
+
+test('cerca de mí: la distancia es al usuario y las más cercanas van primero', async () => {
   const { json } = await cercaDeMi({ usarUbicacionUsuario: true });
+  assert.equal(json.ubicacion.geocoded, 'Ubicación del usuario (GPS)');
+  assert.equal(json.ubicacion.lat, 25.71659223819941);
+  assert.equal(json.properties[0].Colonia, 'Cuauhtémoc'); // 0.67 km del usuario
+  assert.equal(json.properties[0].Proximidad, 0.67);
+  const tool = JSON.parse(json.updatedHistory.find(m => m.role === 'tool').content);
+  assert.match(tool.proximidadReferencia, /DISTANCIA REAL AL USUARIO/);
+});
+
+test('con una distancia escrita sí se busca por radio (incluye municipios vecinos)', async () => {
+  const { json } = await runChat({
+    body: { message: 'casas a 5 km de mi ubicación', history: [], location: GPS_SAN_NICOLAS },
+    toolArgs: { usarUbicacionUsuario: true, km: 5 },
+    bubble: () => BASE
+  });
   const colonias = json.properties.map(p => p.Colonia);
+  assert.equal(json.ubicacion.modo, 'radio');
+  assert.ok(colonias.includes('Del Norte'), 'Monterrey con coordenadas reales a <5 km');
   assert.ok(!colonias.includes('Valle del Seminario 1 Sector'), 'San Pedro en punto de relleno no debe salir');
   assert.ok(!colonias.includes('Centrika 1 Sector'), 'Monterrey en punto de relleno no debe salir');
   assert.ok(!colonias.includes('Cumbres'), 'fuera del radio');
-  assert.ok(colonias.includes('Cuauhtémoc'));
-  assert.ok(colonias.includes('Del Norte'), 'Monterrey con coordenadas reales a <5 km sí es cercano');
-  assert.equal(json.ubicacion.modo, 'radio');
-  assert.equal(json.ubicacion.geocoded, 'Ubicación del usuario (GPS)');
 });
 
 test('cerca de mí: las fichas de su municipio con punto de relleno salen, pero sin distancia inventada', async () => {
   const { json } = await cercaDeMi({ usarUbicacionUsuario: true });
   const relleno = json.properties.filter(p => p.Latitud === RELLENO.lat);
   assert.equal(relleno.length, 2);
+  assert.ok(!json.properties.some(p => p.Ciudad !== 'San Nicolás de los Garza'));
   for (const p of relleno) {
     assert.equal(p.Ciudad, 'San Nicolás de los Garza');
     assert.equal(p.Proximidad, null);
@@ -52,11 +80,14 @@ test('cerca de mí: las fichas de su municipio con punto de relleno salen, pero 
   assert.notEqual(json.properties[0].Proximidad, null);
 });
 
-test('cerca de mí: aunque el modelo copie la ciudad del GPS, se busca por radio', async () => {
-  const { json, bubbleCalls } = await cercaDeMi({ Ciudad: ['San Nicolás de los Garza'], Estado: ['Nuevo León'] });
-  assert.equal(json.ubicacion.modo, 'radio');
-  assert.equal(bubbleCalls[0].get('Ciudad'), null);
-  assert.ok(json.properties.some(p => p.Colonia === 'Del Norte'));
+test('cerca de mí: aunque el modelo invente un radio o copie la ciudad, se busca en su ciudad', async () => {
+  for (const toolArgs of [{ Ciudad: ['San Nicolás de los Garza'], Estado: ['Nuevo León'] }, { usarUbicacionUsuario: true, km: 5 }]) {
+    const { json, bubbleCalls } = await cercaDeMi(toolArgs);
+    assert.equal(json.ubicacion.modo, 'ciudad', JSON.stringify(toolArgs));
+    assert.equal(bubbleCalls[0].get('Ciudad'), '["San Nicolás de los Garza"]');
+    assert.equal(bubbleCalls[0].get('km'), null);
+    assert.ok(json.properties.every(p => p.Ciudad === 'San Nicolás de los Garza'));
+  }
 });
 
 test('búsqueda por ciudad: las fichas con punto de relleno no reportan distancia', async () => {

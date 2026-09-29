@@ -414,9 +414,14 @@ export function reconcileLocationParams(params = {}, { message = '', userLocatio
       }
     }
   } else if (pideCercaDeMi && !lugarMensaje && tieneGPS) {
-    // 3) "Cerca de mí" puro: radio desde el GPS, nada de zonas copiadas.
+    // 3) "Cerca de mí" puro: desde el GPS, nada de zonas copiadas. Sin una
+    //    distancia escrita tampoco hay km: se busca en su ciudad.
     if (!out.usarUbicacionUsuario) ajustes.push('usarUbicacionUsuario encendido: el mensaje pide "cerca de mí"');
     out.usarUbicacionUsuario = true;
+    if (out.km != null && !pideDistancia) {
+      delete out.km;
+      ajustes.push('km descartado: el mensaje no pide distancia');
+    }
     for (const campo of ['Ciudad', 'Colonia', 'Estado', 'Locacion']) {
       if (out[campo] != null && (Array.isArray(out[campo]) ? out[campo].length : true)) {
         ajustes.push(`${campo} descartado: "cerca de mí" usa el GPS`);
@@ -434,15 +439,26 @@ export function reconcileLocationParams(params = {}, { message = '', userLocatio
 // Convierte lo que extrajo el LLM en una intención estructurada y decide el
 // modo de búsqueda. No genera filtros de Bubble directamente.
 export function resolveLocationIntent(params = {}, userLocation = {}) {
-  const ciudad  = toPlaceList(params.Ciudad);
+  let ciudad    = toPlaceList(params.Ciudad);
   const estado  = toPlaceList(params.Estado);
   const colonia = toPlaceList(params.Colonia);
   const km      = params.km != null ? Number(params.km) : null;
   const usarGPS = Boolean(params.usarUbicacionUsuario);
   const referenciaRaw = params.Locacion ? String(params.Locacion).trim() : null;
+  const gpsCoords = usarGPS && userLocation?.lat != null && userLocation?.lon != null
+    ? { lat: Number(userLocation.lat), lng: Number(userLocation.lon) }
+    : null;
+
+  // "Cerca de mí" sin distancia = las propiedades de SU ciudad (el mismo
+  // resultado que escribir la ciudad), ordenadas por distancia a él. Un
+  // radio fijo mezclaba municipios vecinos y fichas con coordenadas de
+  // relleno, y daba otro conteo que la búsqueda por ciudad.
+  const cercaDeMiPorCiudad = Boolean(gpsCoords && km == null && userLocation?.ciudad
+    && !ciudad.length && !estado.length && !colonia.length && !referenciaRaw);
+  if (cercaDeMiPorCiudad) ciudad = [userLocation.ciudad];
 
   const tieneAdmin = Boolean(ciudad.length || estado.length || colonia.length);
-  const pidioDistancia = km != null || usarGPS;
+  const pidioDistancia = !cercaDeMiPorCiudad && (km != null || usarGPS);
 
   // Punto de referencia para modo geográfico. Con varios valores se usa el
   // primero: un radio necesita UN centro, no varios.
@@ -477,10 +493,10 @@ export function resolveLocationIntent(params = {}, userLocation = {}) {
     referencia,
     usarUbicacionUsuario: usarGPS,
     tieneAdmin,
-    // Coordenadas del GPS del usuario, si aplican al modo radio.
-    gpsCoords: usarGPS && userLocation?.lat && userLocation?.lon
-      ? { lat: Number(userLocation.lat), lng: Number(userLocation.lon) }
-      : null
+    cercaDeMiPorCiudad,
+    // Coordenadas del GPS del usuario: centro del radio, o referencia para
+    // ordenar por distancia real en "cerca de mí" por ciudad.
+    gpsCoords
   };
 }
 
@@ -497,7 +513,7 @@ export function buildSearchPlan(intent) {
     // 1) Ciudad exacta -> 2) ampliar al estado -> 3) geográfico desde el centro
     steps.push({ tipo: 'admin', ciudad, estado, etiqueta: 'ciudad exacta' });
     if (estado.length) steps.push({ tipo: 'admin', estado, etiqueta: 'ampliado a estado' });
-    steps.push({ tipo: 'geo', km: 25, etiqueta: 'geográfico 25km desde centro de ciudad' });
+    steps.push({ tipo: 'geo', km: 25, etiqueta: intent.gpsCoords ? 'geográfico 25km desde el usuario' : 'geográfico 25km desde centro de ciudad' });
 
   } else if (mode === SEARCH_MODE.COLONIA) {
     // 1) Colonia (+variantes) -> 2) geográfico cercano -> 3) ampliar a ciudad

@@ -239,7 +239,8 @@ router.post('/chat', async (req, res) => {
     // 2) GEOCODIFICAR — solo si hace falta un punto de referencia.
     // -----------------------------------------------------------------------
     const necesitaCoords = plan.some(s => s.tipo === 'geo');
-    if (necesitaCoords) {
+    // Con GPS siempre se usa: la distancia que se muestra es la real al usuario.
+    if (necesitaCoords || intent.gpsCoords) {
       if (intent.gpsCoords) {
         refCoords = intent.gpsCoords;
         geocodedDisplay = GPS_DISPLAY_NAME;
