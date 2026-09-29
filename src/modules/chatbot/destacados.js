@@ -22,7 +22,7 @@ import * as config from '../../shared/config.js';
 const ROTACION_MIN = Number(config.DESTACADOS_ROTACION_MIN) || 15;
 export const VENTANA_ROTACION_MS = ROTACION_MIN * 60 * 1000;
 // Diferencia máxima de score para considerar "similares" a dos propiedades.
-export const BLOQUE_SCORE = Number(config.DESTACADOS_BLOQUE_SCORE) || 5;
+export const BLOQUE_SCORE = Number(config.DESTACADOS_BLOQUE_SCORE) || 1;
 
 // Bubble manda el campo como texto "yes"/"no"; se aceptan también true/"sí".
 export function esDestacada(prop) {

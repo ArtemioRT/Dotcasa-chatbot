@@ -322,6 +322,9 @@ router.post('/chat', async (req, res) => {
     // usuario ve primero; antes salía del top 3 por score.
     const propertiesSummary = displayProperties.slice(0, 3).map((prop, idx) => ({
       posicion: idx + 1,
+      // true solo si la ficha trae Destacado = yes. El modelo NO debe llamar
+      // "destacada" a una propiedad que no lo sea.
+      destacada: esDestacada(prop),
       tipo: prop['Tipo_de_inmueble'] || prop['tipo_de_inmueble'] || '',
       habitaciones: getPropNum(prop, ['N_Habitaciones', 'Habitaciones', 'habitaciones']),
       banos: getPropNum(prop, ['N_Banos', 'Banos', 'banos']),
@@ -479,6 +482,17 @@ router.post('/chat', async (req, res) => {
     const formattedProperties = formatProperties(displayProperties);
     const hasMoreAvailable = (totalCount > INITIAL_DISPLAY_COUNT) || (descartada.length > 0);
 
+    // Zona con la que "Ver todas" abre el buscador. En una búsqueda por radio
+    // desde el GPS ("cerca de mí") el mensaje no trae ciudad ni colonia, así que
+    // intent.* viene vacío y el buscador recibía TODOS los filtros vacíos
+    // (filtrosBusqueda=||||||||). Se usa la ciudad y el estado del usuario; la
+    // colonia no, porque la del geocodificador rara vez coincide con la grafía
+    // de la base.
+    const sinAdmin = !intent.colonia.length && !intent.ciudad.length && !intent.estado.length;
+    const zonaBuscador = sinAdmin && intent.usarUbicacionUsuario && userLocation?.ciudad
+      ? { colonia: [], ciudad: [userLocation.ciudad], estado: userLocation.estado ? [userLocation.estado] : [] }
+      : { colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado };
+
     return responder({
       type: totalCount > 0 ? 'properties' : 'text',
       content: finalMsg.content || '',
@@ -505,7 +519,8 @@ router.post('/chat', async (req, res) => {
         lat: refCoords?.lat || null, lng: refCoords?.lng || null,
         radiusKm: usedRadius, radiusAutoScaled: !userSpecifiedRadius && totalCount > 0,
         modo: intent.mode, estrategia: usedStep?.etiqueta || null,
-        colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado
+        colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado,
+        buscador: zonaBuscador
       },
       updatedHistory
     }, {

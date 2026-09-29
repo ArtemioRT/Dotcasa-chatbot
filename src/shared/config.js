@@ -8,7 +8,7 @@ export const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Marca de build: se imprime al arrancar para saber de un vistazo qué versión
 // está corriendo realmente en Cloud Run. Súbela cuando cambies algo relevante.
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.3.2';
 export const BUILD_TAG   = 'guardrails-multilingue+m2-rango+destacados';
 
 export const BUBBLE_SEARCH_URL     = process.env.BUBBLE_SEARCH_URL;
@@ -52,4 +52,7 @@ export const MAX_PROPERTIES_TO_SHOW = 20;
 export const DESTACADOS_ROTACION_MIN = 15;
 // Las propiedades NO destacadas rotan solo entre las de score similar: este es
 // el rango de puntos que se considera "similar" (más grande = más rotación).
-export const DESTACADOS_BLOQUE_SCORE = 5;
+// Con 1 solo se turnan las que empatan de verdad (mismo punto de referencia,
+// mismas características); con 5 casi todo el resultado caía en un solo bloque
+// y la propiedad más cercana quedaba en el lugar 9.
+export const DESTACADOS_BLOQUE_SCORE = 1;
