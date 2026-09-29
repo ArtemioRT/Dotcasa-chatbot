@@ -276,12 +276,49 @@ export function extractPlaceMention(message) {
   return conocido || null;
 }
 
+// Distancia de edición (Levenshtein) para tolerar typos: "san nicolas de
+// los gara" es "San Nicolás de los Garza".
+function editDistance(a, b) {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Mismo lugar aunque venga incompleto o con typo.
+export function pareceMismoLugar(a, b) {
+  const x = normalizePlace(a), y = normalizePlace(b);
+  if (!x || !y) return false;
+  if (x === y || x.includes(y) || y.includes(x)) return true;
+  const corto = Math.min(x.length, y.length);
+  if (corto < 5) return false;
+  return editDistance(x, y) <= Math.max(1, Math.floor(corto * 0.15));
+}
+
 function mencionaValor(mensajeNorm, lugarNorm, valor) {
   const v = normalizePlace(valor);
   if (!v) return false;
   if (mensajeNorm.includes(v)) return true;
-  // "san nicolas" en el mensaje vs "San Nicolás de los Garza" del modelo.
-  return Boolean(lugarNorm) && (v.includes(lugarNorm) || lugarNorm.includes(v));
+  // "san nicolas" o "san nicolas de los gara" en el mensaje vs
+  // "San Nicolás de los Garza" del modelo.
+  return Boolean(lugarNorm) && pareceMismoLugar(v, lugarNorm);
+}
+
+// Nombre oficial de un municipio conocido, tolerando typos.
+export function ciudadConocida(texto) {
+  const n = normalizePlace(texto);
+  if (!n) return null;
+  if (KNOWN_CITIES.has(n)) return KNOWN_CITIES.get(n);
+  for (const [alias, info] of KNOWN_CITIES) {
+    if (alias.length >= 8 && pareceMismoLugar(alias, n) && !n.includes(alias) && !alias.includes(n)) return info;
+  }
+  return null;
 }
 
 function mismoLugar(a, b) {
@@ -332,7 +369,7 @@ export function reconcileLocationParams(params = {}, { message = '', userLocatio
 
   // Municipios conocidos que el modelo puso como colonia o mal escritos
   // ("Sanico" como colonia) pasan a Ciudad con su nombre oficial.
-  const ciudadOficial = (v) => KNOWN_CITIES.get(normalizePlace(v))?.ciudad || null;
+  const ciudadOficial = (v) => ciudadConocida(v)?.ciudad || null;
   const ciudades = toPlaceList(out.Ciudad).map(v => ciudadOficial(v) || v);
   const colonias = [];
   for (const v of toPlaceList(out.Colonia)) {
@@ -364,7 +401,7 @@ export function reconcileLocationParams(params = {}, { message = '', userLocatio
     // 4) El modelo no extrajo el lugar: se usa el del mensaje, con el nombre
     //    oficial si es un municipio conocido o el del GPS.
     if (!tieneAdmin()) {
-      const conocida = KNOWN_CITIES.get(lugarMensaje);
+      const conocida = ciudadConocida(lugarMensaje);
       if (conocida) {
         out.Ciudad = [conocida.ciudad];
         ajustes.push(`Ciudad tomada del mensaje (${conocida.ciudad})`);
