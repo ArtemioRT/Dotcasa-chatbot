@@ -22,6 +22,7 @@ import {
   inheritLocation, reconcileLocationParams, SEARCH_MODE, GPS_DISPLAY_NAME
 } from './locationSearch.js';
 import { classifyAndScoreProperties, formatProperties } from './scoring.js';
+import { buildBuscadorUrl } from './buscadorUrl.js';
 import { ordenarConDestacados, esDestacada } from './destacados.js';
 import {
   buildSystemPrompt, CHAT_TOOLS,
@@ -584,6 +585,13 @@ router.post('/chat', async (req, res) => {
     const zonaBuscador = sinAdmin && intent.usarUbicacionUsuario && userLocation?.ciudad
       ? { colonia: [], ciudad: [userLocation.ciudad], estado: userLocation.estado ? [userLocation.estado] : [] }
       : { colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado };
+    // Si la ciudad buscada es la del GPS, su estado sirve para armar la ruta.
+    if (!zonaBuscador.estado.length && zonaBuscador.ciudad.length === 1 && userLocation?.estado
+        && normalizeSearchText(zonaBuscador.ciudad[0]) === normalizeSearchText(userLocation.ciudad)) {
+      zonaBuscador.estado = [userLocation.estado];
+    }
+    // URL completa de "Ver todas": el front solo la abre.
+    const urlBuscador = buildBuscadorUrl(params, zonaBuscador);
 
     return responder({
       type: totalCount > 0 ? 'properties' : 'text',
@@ -591,6 +599,7 @@ router.post('/chat', async (req, res) => {
       properties: formattedProperties,
       totalCount, displayedCount: displayProperties.length,
       hasMore: hasMoreAvailable,
+      urlBuscador,
       moreInfo: {
         initialDisplay: INITIAL_DISPLAY_COUNT,
         visiblesEnMemoria: displayProperties.length,
@@ -612,7 +621,7 @@ router.post('/chat', async (req, res) => {
         radiusKm: usedRadius, radiusAutoScaled: !userSpecifiedRadius && totalCount > 0,
         modo: intent.mode, estrategia: usedStep?.etiqueta || null,
         colonia: intent.colonia, ciudad: intent.ciudad, estado: intent.estado,
-        buscador: zonaBuscador
+        buscador: { ...zonaBuscador, url: urlBuscador }
       },
       updatedHistory
     }, {
