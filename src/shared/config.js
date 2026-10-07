@@ -12,6 +12,8 @@ export const APP_VERSION = '1.3.2';
 export const BUILD_TAG   = 'guardrails-multilingue+m2-rango+destacados';
 
 export const BUBBLE_SEARCH_URL     = process.env.BUBBLE_SEARCH_URL;
+// Base del buscador público al que lleva "Ver todas" (rutas tipo /casa/venta).
+export const BUSCADOR_BASE_URL     = process.env.BUSCADOR_BASE_URL || 'https://dotcasa.com';
 export const OPENAI_API_KEY        = process.env.OPENAI_API_KEY;
 export const MAPBOX_ACCESS_TOKEN   = process.env.MAPBOX_ACCESS_TOKEN;
 
