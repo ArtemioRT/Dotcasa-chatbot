@@ -1,5 +1,5 @@
 // ============================================================================
-// URL DEL BUSCADOR — "Ver todas" abre https://dotcasa.com/<ruta>?<filtros>
+// URL DEL BUSCADOR — "Ver todas" abre https://dotcasa.com.mx/<ruta>?<filtros>
 // ============================================================================
 // Rutas del buscador (cada segmento es opcional, pero en este orden):
 //   /tipo/operación/estado/ciudad/colonia
@@ -7,17 +7,27 @@
 // Ejemplos: /casa/venta/nuevo-leon/monterrey/cumbres, /venta, /cp/64000
 // Filtros en query string: precio_min, precio_max, construccion_min,
 // construccion_max, terreno_min, terreno_max, antiguedad, banos, recamaras.
+// Es el mismo formato que arman el index y el buscador de Bubble (DCRutas):
+// antiguedad va como rango "min-max" y sin ruta se abre /propiedades.
 // ============================================================================
 import { BUSCADOR_BASE_URL } from '../../shared/config.js';
-import { normalizeSearchText } from '../../shared/utils.js';
 import { ciudadConocida, toPlaceList } from './locationSearch.js';
 
 // "San Nicolás de los Garza" -> "san-nicolas-de-los-garza"
+// Igual que Utils.normalizar del Worker dotcasa-domain (y DCRutas en Bubble):
+// minúsculas, sin acentos, espacios/guiones bajos -> "-". La puntuación se
+// conserva ("Col. Del Valle" -> "col.-del-valle") porque así quedan los slugs
+// de la tabla ruta; si se quitara, el Worker no encontraría la ruta (404).
+// Solo se quitan los caracteres que romperían la URL (/ ? #).
 export function slugify(texto) {
-  return normalizeSearchText(texto)
-    .replace(/[^a-z0-9\s-]/g, ' ')
+  return String(texto || '')
     .trim()
-    .replace(/[\s-]+/g, '-');
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\/?#]+/g, ' ')
+    .trim()
+    .replace(/[_\s]+/g, '-');
 }
 
 // Un segmento de ruta admite UN valor. Con varios ("casas o departamentos",
@@ -74,11 +84,14 @@ export function buildBuscadorUrl(params = {}, zona = {}) {
   const query = new URLSearchParams();
   for (const [nombre, clave] of FILTROS) {
     const valor = Number(params[clave]);
-    if (params[clave] != null && Number.isFinite(valor) && valor > 0) query.append(nombre, String(valor));
+    if (params[clave] == null || !Number.isFinite(valor) || valor <= 0) continue;
+    // El buscador lee la antigüedad como rango "min-max" (0-5, 6-10...).
+    query.append(nombre, nombre === 'antiguedad' ? `0-${valor}` : String(valor));
   }
 
   const base = BUSCADOR_BASE_URL.replace(/\/+$/, '');
   const ruta = segmentos.filter(Boolean).join('/');
   const qs = query.toString();
-  return `${base}/${ruta}${qs ? `?${qs}` : ''}`;
+  // Sin ruta, el listado general es /propiedades (la raíz es el inicio).
+  return `${base}/${ruta || 'propiedades'}${qs ? `?${qs}` : ''}`;
 }
