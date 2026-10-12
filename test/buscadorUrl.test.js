@@ -46,11 +46,54 @@ test('filtros con los nombres nuevos del buscador', () => {
   });
 });
 
-test('sin estado se completa con el del municipio conocido; con varios valores se omite el segmento', () => {
+test('sin estado se completa con el del municipio conocido', () => {
   assert.equal(buildBuscadorUrl({}, { ciudad: ['San Nicolás de los Garza'] }), 'https://dotcasa.com.mx/nuevo-leon/san-nicolas-de-los-garza');
-  assert.equal(buildBuscadorUrl({ tipoInmueble: ['Casa', 'Departamento'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey', 'San Pedro Garza García'] }), 'https://dotcasa.com.mx/nuevo-leon');
-  // Ciudad desconocida sin estado: no se puede armar la ruta de ciudad.
-  assert.equal(buildBuscadorUrl({}, { ciudad: ['Ciudad Mante'] }), 'https://dotcasa.com.mx/propiedades');
+  // Ciudad desconocida sin estado: no hay ruta de ciudad, pero no se pierde (va en la query).
+  assert.equal(buildBuscadorUrl({}, { ciudad: ['Ciudad Mante'] }), 'https://dotcasa.com.mx/propiedades?ciudad=Ciudad%20Mante');
+});
+
+test('valores múltiples: la ruta lleva lo que es uno solo y el resto va en la query como lista', () => {
+  const B = 'https://dotcasa.com.mx';
+  const casos = [
+    // varios tipos
+    [{ tipoInmueble: ['Casa', 'Departamento'], tipoOperación: ['Venta'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey'] },
+      '/venta/nuevo-leon/monterrey?tipo=casa,departamento'],
+    // varias operaciones
+    [{ tipoInmueble: ['Casa'], tipoOperación: ['Venta', 'Renta'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey'] },
+      '/casa/nuevo-leon/monterrey?operacion=venta,renta'],
+    // varias colonias de una ciudad
+    [{ tipoOperación: ['Venta'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey'], colonia: ['Cumbres', 'Contry'] },
+      '/venta/nuevo-leon/monterrey?colonia=Cumbres,Contry'],
+    // varias ciudades del mismo estado (el estado se deduce de los municipios conocidos)
+    [{ tipoInmueble: ['Casa'], tipoOperación: ['Venta'] }, { ciudad: ['Monterrey', 'San Pedro Garza García'] },
+      '/casa/venta/nuevo-leon?ciudad=Monterrey,San%20Pedro%20Garza%20Garc%C3%ADa'],
+    // varios estados
+    [{}, { estado: ['Nuevo León', 'Jalisco'], ciudad: ['Monterrey', 'Guadalajara'] },
+      '/propiedades?estado=Nuevo%20Le%C3%B3n,Jalisco&ciudad=Monterrey,Guadalajara'],
+    // todo múltiple + filtros
+    [{ tipoInmueble: ['Casa', 'Terreno'], tipoOperación: ['Venta', 'Preventa'], Habitaciones: 3 }, { estado: ['Nuevo León'], ciudad: ['Monterrey'], colonia: ['Cumbres', 'Contry'] },
+      '/nuevo-leon/monterrey?tipo=casa,terreno&operacion=venta,preventa&colonia=Cumbres,Contry&recamaras=3'],
+    // repetidos (por acento o mayúsculas) cuentan una vez
+    [{ tipoInmueble: ['Casa', 'casa'] }, { ciudad: ['Monterrey', 'monterrey'] }, '/casa/nuevo-leon/monterrey'],
+    // /tipo/estado/ciudad/colonia no existe: la colonia va en la query
+    [{ tipoInmueble: ['Casa'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey'], colonia: ['Cumbres'] },
+      '/casa/nuevo-leon/monterrey?colonia=Cumbres'],
+    // /tipo/cp/N no existe: el CP va en la query
+    [{ tipoInmueble: ['Casa'] }, { cp: '64000' }, '/casa?cp=64000']
+  ];
+  for (const [params, zona, esperado] of casos) {
+    assert.equal(buildBuscadorUrl(params, zona), B + esperado, esperado);
+  }
+});
+
+test('la query se lee de vuelta igual que en el buscador (URLSearchParams)', () => {
+  const url = new URL(buildBuscadorUrl(
+    { tipoInmueble: ['Casa', 'Departamento'] },
+    { estado: ['Nuevo León'], ciudad: ['San Nicolás de los Garza', 'Monterrey'] }
+  ));
+  assert.equal(url.pathname, '/nuevo-leon');
+  assert.deepEqual(url.searchParams.get('tipo').split(','), ['casa', 'departamento']);
+  assert.deepEqual(url.searchParams.get('ciudad').split(','), ['San Nicolás de los Garza', 'Monterrey']);
 });
 
 test('/chat devuelve urlBuscador para "Ver todas"', async () => {
