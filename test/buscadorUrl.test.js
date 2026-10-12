@@ -1,4 +1,4 @@
-// URL de "Ver todas": https://dotcasa.com/<tipo>/<operación>/<estado>/<ciudad>/<colonia>?filtros
+// URL de "Ver todas": https://dotcasa.com.mx/<tipo>/<operación>/<estado>/<ciudad>/<colonia>?filtros
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // helpers.js va primero: fija las variables de entorno antes de que se cargue config.js.
@@ -9,6 +9,9 @@ test('slugify quita acentos y usa guiones', () => {
   assert.equal(slugify('San Nicolás de los Garza'), 'san-nicolas-de-los-garza');
   assert.equal(slugify('Nuevo León'), 'nuevo-leon');
   assert.equal(slugify('Local Comercial'), 'local-comercial');
+  // Igual que el Worker: la puntuación se conserva, solo cambian espacios.
+  assert.equal(slugify('Col. Del Valle'), 'col.-del-valle');
+  assert.equal(slugify('  Cumbres 2do Sector '), 'cumbres-2do-sector');
 });
 
 test('rutas en el orden tipo/operación/estado/ciudad/colonia', () => {
@@ -25,10 +28,10 @@ test('rutas en el orden tipo/operación/estado/ciudad/colonia', () => {
     [{}, { estado: ['Nuevo León'] }, '/nuevo-leon'],
     [{}, { estado: ['Nuevo León'], ciudad: ['Monterrey'], colonia: ['Cumbres'] }, '/nuevo-leon/monterrey/cumbres'],
     [{}, { cp: '64000' }, '/cp/64000'],
-    [{}, {}, '/']
+    [{}, {}, '/propiedades']
   ];
   for (const [params, zona, ruta] of casos) {
-    assert.equal(buildBuscadorUrl(params, zona), `https://dotcasa.com${ruta}`, ruta);
+    assert.equal(buildBuscadorUrl(params, zona), `https://dotcasa.com.mx${ruta}`, ruta);
   }
 });
 
@@ -39,15 +42,15 @@ test('filtros con los nombres nuevos del buscador', () => {
   }, {}));
   assert.deepEqual(Object.fromEntries(url.searchParams), {
     precio_min: '1000000', precio_max: '3000000', construccion_min: '120', construccion_max: '200',
-    terreno_min: '150', terreno_max: '300', antiguedad: '5', banos: '2', recamaras: '3'
+    terreno_min: '150', terreno_max: '300', antiguedad: '0-5', banos: '2', recamaras: '3'
   });
 });
 
 test('sin estado se completa con el del municipio conocido; con varios valores se omite el segmento', () => {
-  assert.equal(buildBuscadorUrl({}, { ciudad: ['San Nicolás de los Garza'] }), 'https://dotcasa.com/nuevo-leon/san-nicolas-de-los-garza');
-  assert.equal(buildBuscadorUrl({ tipoInmueble: ['Casa', 'Departamento'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey', 'San Pedro Garza García'] }), 'https://dotcasa.com/nuevo-leon');
+  assert.equal(buildBuscadorUrl({}, { ciudad: ['San Nicolás de los Garza'] }), 'https://dotcasa.com.mx/nuevo-leon/san-nicolas-de-los-garza');
+  assert.equal(buildBuscadorUrl({ tipoInmueble: ['Casa', 'Departamento'] }, { estado: ['Nuevo León'], ciudad: ['Monterrey', 'San Pedro Garza García'] }), 'https://dotcasa.com.mx/nuevo-leon');
   // Ciudad desconocida sin estado: no se puede armar la ruta de ciudad.
-  assert.equal(buildBuscadorUrl({}, { ciudad: ['Ciudad Mante'] }), 'https://dotcasa.com/');
+  assert.equal(buildBuscadorUrl({}, { ciudad: ['Ciudad Mante'] }), 'https://dotcasa.com.mx/propiedades');
 });
 
 test('/chat devuelve urlBuscador para "Ver todas"', async () => {
@@ -57,7 +60,7 @@ test('/chat devuelve urlBuscador para "Ver todas"', async () => {
     toolArgs: { tipoInmueble: ['Casa'], tipoOperación: ['Venta'], Colonia: ['Cumbres'], Ciudad: ['Monterrey'], Estado: ['Nuevo León'], Habitaciones: 3, Precio_max: 5000000 },
     bubble: () => base
   });
-  assert.equal(json.urlBuscador, 'https://dotcasa.com/casa/venta/nuevo-leon/monterrey/cumbres?precio_max=5000000&recamaras=3');
+  assert.equal(json.urlBuscador, 'https://dotcasa.com.mx/casa/venta/nuevo-leon/monterrey/cumbres?precio_max=5000000&recamaras=3');
   assert.equal(json.ubicacion.buscador.url, json.urlBuscador);
 });
 
@@ -68,5 +71,5 @@ test('/chat "cerca de mí": la URL lleva el estado y la ciudad del GPS', async (
     toolArgs: { usarUbicacionUsuario: true },
     bubble: () => base
   });
-  assert.equal(json.urlBuscador, 'https://dotcasa.com/nuevo-leon/san-nicolas-de-los-garza');
+  assert.equal(json.urlBuscador, 'https://dotcasa.com.mx/nuevo-leon/san-nicolas-de-los-garza');
 });
