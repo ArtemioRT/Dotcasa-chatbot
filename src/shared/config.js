@@ -3,54 +3,62 @@
 // ============================================================================
 import 'dotenv/config';
 
-export const PORT = process.env.PORT || 3000;
-export const IS_PROD = process.env.NODE_ENV === 'production';
+// Lee una variable de entorno sin espacios ni saltos de línea alrededor (en la
+// consola de Cloud Run es fácil pegar ' valor'). Vacía cuenta como no definida.
+export function env(name, fallback) {
+  const raw = process.env[name];
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  return value === '' ? fallback : value;
+}
+
+export const PORT = env('PORT', 3000);
+export const IS_PROD = env('NODE_ENV') === 'production';
 
 // Marca de build: se imprime al arrancar para saber de un vistazo qué versión
 // está corriendo realmente en Cloud Run. Súbela cuando cambies algo relevante.
 export const APP_VERSION = '1.3.2';
 export const BUILD_TAG   = 'guardrails-multilingue+m2-rango+destacados';
 
-export const BUBBLE_SEARCH_URL     = process.env.BUBBLE_SEARCH_URL;
+export const BUBBLE_SEARCH_URL     = env('BUBBLE_SEARCH_URL');
 // Base del buscador público al que lleva "Ver todas" (rutas tipo /casa/venta).
-export const BUSCADOR_BASE_URL     = process.env.BUSCADOR_BASE_URL || 'https://dotcasa.com.mx';
-export const OPENAI_API_KEY        = process.env.OPENAI_API_KEY;
-export const MAPBOX_ACCESS_TOKEN   = process.env.MAPBOX_ACCESS_TOKEN;
+export const BUSCADOR_BASE_URL     = env('BUSCADOR_BASE_URL', 'https://dotcasa.com.mx');
+export const OPENAI_API_KEY        = env('OPENAI_API_KEY');
+export const MAPBOX_ACCESS_TOKEN   = env('MAPBOX_ACCESS_TOKEN');
 
 // ---------------------------------------------------------------------------
 // GCS — volcado de payloads de Bubble para diagnóstico
 // ---------------------------------------------------------------------------
-export const GCS_BUCKET_NAME   = process.env.GCS_BUCKET_NAME   || 'dotcasa-fotos-prod';
-export const DEBUG_DUMP_PREFIX = process.env.DEBUG_DUMP_PREFIX || 'debug-bubble-json';
+export const GCS_BUCKET_NAME   = env('GCS_BUCKET_NAME', 'dotcasa-fotos-prod');
+export const DEBUG_DUMP_PREFIX = env('DEBUG_DUMP_PREFIX', 'debug-bubble-json');
 // Por defecto solo se vuelca cuando el parseo falla. Ponlo en 'always' para
 // guardar todas las respuestas, o 'off' para desactivarlo por completo.
-export const DEBUG_DUMP_MODE   = process.env.DEBUG_DUMP_MODE   || 'on-error';
+export const DEBUG_DUMP_MODE   = env('DEBUG_DUMP_MODE', 'on-error');
 
 // Bitácora de cada petición a /chat: guarda entrada y salida en GCS para poder
 // auditar qué parámetros llegan y qué se responde.
 //   'on'  -> guarda todas las peticiones (default)
 //   'off' -> desactivado
-export const CHAT_LOG_MODE   = process.env.CHAT_LOG_MODE   || 'on';
-export const CHAT_LOG_PREFIX = process.env.CHAT_LOG_PREFIX || 'chat-logs';
+export const CHAT_LOG_MODE   = env('CHAT_LOG_MODE', 'on');
+export const CHAT_LOG_PREFIX = env('CHAT_LOG_PREFIX', 'chat-logs');
 
 // Formato con el que viajan Ciudad/Estado/Colonia a Bubble. Depende de cómo
 // esté armado el constraint del workflow:
 //   'json'  -> ["Monterrey"]   (si el workflow parsea JSON, como tipoInmueble)
 //   'plain' -> Monterrey       (si el constraint es Ciudad = <param>)
 //   'csv'   -> Monterrey,San Pedro
-export const BUBBLE_ADMIN_FORMAT = process.env.BUBBLE_ADMIN_FORMAT || 'json';
+export const BUBBLE_ADMIN_FORMAT = env('BUBBLE_ADMIN_FORMAT', 'json');
 
 // Si el workflow de Bubble ya tiene los parámetros M2_cons_max y
 // M2_terreno_max, pon BUBBLE_M2_MAX=true para mandarlos. Mientras tanto, el
 // máximo se aplica solo en el filtro local del backend.
-export const BUBBLE_M2_MAX = process.env.BUBBLE_M2_MAX === 'true';
+export const BUBBLE_M2_MAX = env('BUBBLE_M2_MAX') === 'true';
 
 // Bubble: tope por llamada y presupuesto total para todo el plan de búsqueda
 // (varios pasos + reintentos). Cloud Run corta la petición a los 60 s, así que
 // el plan completo tiene que caber holgado antes de las dos llamadas a OpenAI.
-export const BUBBLE_TIMEOUT_MS       = Number(process.env.BUBBLE_TIMEOUT_MS) || 15000;
-export const BUBBLE_SEARCH_BUDGET_MS = Number(process.env.BUBBLE_SEARCH_BUDGET_MS) || 25000;
-export const OPENAI_TIMEOUT_MS       = Number(process.env.OPENAI_TIMEOUT_MS) || 15000;
+export const BUBBLE_TIMEOUT_MS       = Number(env('BUBBLE_TIMEOUT_MS')) || 15000;
+export const BUBBLE_SEARCH_BUDGET_MS = Number(env('BUBBLE_SEARCH_BUDGET_MS')) || 25000;
+export const OPENAI_TIMEOUT_MS       = Number(env('OPENAI_TIMEOUT_MS')) || 15000;
 
 export const MIN_RESULTS_THRESHOLD  = 3;
 export const MIN_VISIBLE_TARGET     = 15;
